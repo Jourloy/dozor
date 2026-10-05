@@ -1,0 +1,33 @@
+name: Signed ARM64 release
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04-arm
+    container: debian:bookworm
+    steps:
+      - run: apt-get update && apt-get install -y ca-certificates curl git build-essential pkg-config xz-utils python3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./... && go vet ./...
+      - run: bash scripts/build-release.sh "$GITHUB_REF_NAME"
+      - name: Sign metadata
+        env:
+          SIGNING_KEY: ${{ secrets.DOZOR_SIGNING_KEY }}
+        run: |
+          test -n "$SIGNING_KEY"
+          umask 077
+          printf '%s' "$SIGNING_KEY" > /tmp/dozor-signing.key
+          trap 'rm -f /tmp/dozor-signing.key' EXIT
+          go run ./cmd/dozor sign --key /tmp/dozor-signing.key --bundle "dist/dozor_${GITHUB_REF_NAME}_linux_arm64.tar.gz" --version "$GITHUB_REF_NAME" --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/dozor_${GITHUB_REF_NAME}_linux_arm64.tar.gz" --out dist/release.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/dozor_*_linux_arm64.tar.gz
+            dist/release.json
+            dist/ffmpeg-8.0.1.tar.xz

@@ -1,0 +1,8 @@
+[Unit]
+Description=Recover interrupted Dozor update before startup
+Before=dozor.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/dozor-system system recover
+RemainAfterExit=yes

@@ -1,0 +1,34 @@
+[Unit]
+Description=Dozor home video archive
+After=network-online.target dozor-recover.service
+Wants=network-online.target
+Requires=dozor-recover.service
+
+[Service]
+User=dozor
+Group=dozor
+Environment=TZ=UTC
+ExecStart=/opt/dozor/current/bin/dozor serve --config /var/lib/dozor/config.json --state /var/lib/dozor --socket /run/dozor/control.sock
+WorkingDirectory=/var/lib/dozor
+RuntimeDirectory=dozor
+RuntimeDirectoryMode=0700
+StateDirectory=dozor
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=35
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/dozor /srv/dozor /run/dozor
+
+[Install]
+WantedBy=multi-user.target

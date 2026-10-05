@@ -1,0 +1,10 @@
+/bin/
+/.cache/
+/.state/
+/dist/
+*.key
+*.pem
+*.sqlite*
+coverage.out
+__pycache__/
+*.pyc

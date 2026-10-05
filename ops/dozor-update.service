@@ -1,0 +1,10 @@
+[Unit]
+Description=Verify and apply signed Dozor update
+After=network-online.target
+OnFailure=dozor-rollback.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/dozor-system system update
+TimeoutStartSec=25min
+UMask=0077

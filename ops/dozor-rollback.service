@@ -1,0 +1,8 @@
+[Unit]
+Description=Recover failed Dozor updater
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/test -f /opt/dozor/pending-update.json
+ExecStart=/usr/local/libexec/dozor-system system recover
+ExecStartPost=/usr/bin/systemctl --no-block restart dozor.service

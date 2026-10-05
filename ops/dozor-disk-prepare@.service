@@ -1,0 +1,7 @@
+[Unit]
+Description=Mount selected Dozor archive disk
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/dozor-system system select-disk %i
+TimeoutStartSec=45
