@@ -1,0 +1,548 @@
+/*
+ * Dozor web UI: layout of the screens.
+ * Works only with the ported 00 components (components.css) and tokens (tokens.css); no raw colours, radii from the 00 scale.
+ * The working screens are "quiet" (00.md sections 2, 13): no light spots, grids, orbits, tilt or decorative layers.
+ */
+@layer app {
+  :root {
+    --shell-gutter: clamp(24px, 4vw, 56px);
+    --topbar-height: 57px;
+  }
+  @media (max-width: 640px) {
+    :root {
+      --shell-gutter: 20px;
+    }
+  }
+  /* Toasts sit above the bottom navigation bar (00.md section 10.6, --a00-toast-bottom). */
+  @media (max-width: 1023px) {
+    :root {
+      --a00-toast-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+    }
+    /* The sticky top bar must not cover what is scrolled or focused into view (00.md section 15). */
+    html {
+      scroll-padding-block-start: calc(var(--topbar-height) + 24px);
+    }
+  }
+
+  /* ---------- Login ---------- */
+  .gate {
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 32px var(--shell-gutter);
+  }
+  .gate-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    width: min(440px, 100%);
+  }
+  .gate-title {
+    color: var(--a00-ink);
+    font: 500 32px/1.12 var(--a00-font-display);
+    letter-spacing: -0.04em;
+    text-wrap: balance;
+  }
+  .gate-card .ui-card-header {
+    row-gap: 12px;
+  }
+  /* On a narrow phone the sticker goes above the heading: beside it the display title would break a word. */
+  @media (max-width: 480px) {
+    .gate-card .ui-card-header > .ui-card-action {
+      grid-column: 1 / -1;
+      grid-row: 1;
+      justify-self: start;
+    }
+    .gate-card .ui-card-header > .gate-title {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+    .gate-card .ui-card-header > .ui-card-description {
+      grid-row: 3;
+    }
+  }
+  @media (max-width: 359px) {
+    .gate-title {
+      font-size: 28px;
+      font-weight: 600;
+    }
+  }
+
+  /* ---------- Shell ---------- */
+  .skip-link {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    z-index: 90;
+    padding: 12px 16px;
+    border-radius: var(--a00-radius-md);
+    color: var(--a00-on-accent);
+    background: var(--a00-accent);
+    font: 500 14px/1.4 var(--a00-font-ui);
+    text-decoration: none;
+    translate: 0 -200%;
+  }
+  .skip-link:focus-visible {
+    translate: 0;
+  }
+  .app {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  .app-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: var(--topbar-height);
+    padding: 4px calc(var(--shell-gutter) - 12px) 4px var(--shell-gutter);
+    background: var(--a00-ground);
+    border-bottom: 1px solid var(--a00-border);
+  }
+  .app-brand {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    border-radius: var(--a00-radius-xs);
+    color: var(--a00-ink);
+    font: 600 22px/1.2 var(--a00-font-ui);
+    letter-spacing: -0.02em;
+    text-decoration: none;
+  }
+  .app-main {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: calc(var(--a00-shell-max) + 2 * var(--shell-gutter));
+    min-width: 0;
+    margin-inline: auto;
+    padding: 24px var(--shell-gutter) calc(112px + env(safe-area-inset-bottom, 0px));
+    outline: none;
+  }
+  @media (min-width: 1024px) {
+    .app {
+      padding-inline-start: 16rem;
+    }
+    .app-topbar {
+      display: none;
+    }
+    .app-main {
+      padding-block: 40px 64px;
+    }
+  }
+
+  /* ---------- Page header: h1, then the context line (today's date and the state of the system) ---------- */
+  .page-header {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+  .page-title {
+    color: var(--a00-ink);
+    font: 500 clamp(32px, 3.8vw, 44px) / 1.12 var(--a00-font-display);
+    letter-spacing: -0.04em;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+  @media (max-width: 640px) {
+    .page-title {
+      font-size: 32px;
+    }
+  }
+  .page-context {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    color: var(--a00-muted);
+    font: 400 13px/1.5 var(--a00-font-ui);
+  }
+  .page-date,
+  .page-updated {
+    font-variant-numeric: tabular-nums;
+  }
+  .alerts {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .alerts:not(:has(> :not([hidden]))) {
+    display: none;
+  }
+  .tab {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    min-width: 0;
+  }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+  .toolbar-start {
+    justify-content: flex-start;
+  }
+  @media (max-width: 640px) {
+    .toolbar > .ui-button {
+      flex: 1 1 auto;
+    }
+  }
+
+  /* ---------- Overview ---------- */
+  /* One card of unequal weight: the main result large, the rest as a short list (00.md sections 10.2, 17). */
+  .summary-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  @media (min-width: 768px) {
+    .summary-body {
+      grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+      align-items: center;
+      gap: 48px;
+    }
+  }
+  .summary-main {
+    min-width: 0;
+  }
+  .summary-value.ui-metric-value {
+    font-size: clamp(40px, 5vw, 56px);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+  }
+  .summary-value .ui-metric-unit {
+    font-size: 20px;
+  }
+  .summary-row.ui-item {
+    padding-inline: 0;
+    padding-block: 12px;
+  }
+  .summary-figure {
+    color: var(--a00-ink);
+    font: 600 20px/1.3 var(--a00-font-ui);
+    font-variant-numeric: tabular-nums;
+  }
+  .summary-meter {
+    flex: 1 0 100%;
+  }
+  .overview-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  @media (min-width: 1280px) {
+    .overview-grid {
+      grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    }
+  }
+  .status-row.ui-item {
+    padding-inline: 0;
+    padding-block: 12px;
+  }
+  .status-row .ui-item-description {
+    font-size: 13px;
+  }
+  .status-time {
+    font-variant-numeric: tabular-nums;
+  }
+  .notices {
+    container-type: inline-size;
+    max-height: 420px;
+    overflow: auto;
+    border-radius: var(--a00-radius-sm);
+  }
+  .notice {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 16px;
+    padding-block: 12px;
+    border-bottom: 1px solid var(--a00-border);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .notice:last-child {
+    border-bottom: 0;
+  }
+  .notice > time {
+    color: var(--a00-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  @container (max-width: 400px) {
+    .notice {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* ---------- Events ---------- */
+  .filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 16px;
+  }
+  .filter-bar > .ui-field {
+    flex: 1 1 200px;
+    max-width: 280px;
+  }
+  @media (max-width: 640px) {
+    .filter-bar > .ui-field {
+      max-width: none;
+    }
+    .filter-bar > .ui-button {
+      flex: 1 1 100%;
+    }
+  }
+  /* Both cards of the row stretch to the same height (00.md section 6): the list scrolls inside its card. */
+  .events-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  @media (min-width: 1024px) {
+    .events-layout {
+      grid-template-columns: 340px minmax(0, 1fr);
+    }
+  }
+  .event-scroll {
+    max-height: min(720px, 70dvh);
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  @media (max-width: 1023px) {
+    .event-scroll {
+      max-height: 420px;
+    }
+  }
+  /* Every row has the same anatomy: camera, start time, then the status badge underneath. */
+  .event-row.ui-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .event-row .ui-item-content {
+    flex: none;
+    width: 100%;
+  }
+  .event-time {
+    font-variant-numeric: tabular-nums;
+  }
+  .event-skeletons {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .event-skeleton {
+    height: 64px;
+  }
+  .event-more {
+    display: flex;
+    justify-content: center;
+    padding-top: 12px;
+  }
+  .player-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .player-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .video-frame {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    background: var(--a00-ground);
+    border: 1px solid var(--a00-border);
+    border-radius: var(--a00-radius-md);
+  }
+  .video-frame > video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .timeline-head,
+  .slider-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px 12px;
+  }
+  .timeline-time,
+  .slider-value {
+    color: var(--a00-ink);
+    font: 500 14px/1.4 var(--a00-font-ui);
+    font-variant-numeric: tabular-nums;
+  }
+  .player-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .player-actions:not(:has(> :not([hidden]))) {
+    display: none;
+  }
+  /* The empty player fills the card, so the two cards of the row read as one height. */
+  .player-empty {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+  .player-empty .ui-empty {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding-block: 64px;
+  }
+
+  /* ---------- Cameras ---------- */
+  .camera-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  @media (min-width: 768px) {
+    .camera-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 24px;
+    }
+  }
+  .camera-card .ui-card-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  /* The cards of a row are equal in height (the grid stretches them); the actions stay on one line at the bottom. */
+  .camera-card .ui-card-footer {
+    margin-top: auto;
+  }
+  /* Where subgrid exists, the header, the text and the actions of neighbouring cards also share their lines. */
+  @supports (grid-template-rows: subgrid) {
+    .camera-grid > .camera-card {
+      display: grid;
+      grid-row: span 3;
+      grid-template-rows: subgrid;
+      row-gap: var(--card-spacing);
+    }
+    .camera-card .ui-card-footer {
+      margin-top: 0;
+      align-self: end;
+    }
+  }
+  .camera-url {
+    color: var(--a00-muted);
+    font: 400 13px/1.5 var(--a00-font-code);
+    overflow-wrap: anywhere;
+  }
+  .camera-meta {
+    color: var(--a00-muted);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .camera-grid > .ui-empty {
+    grid-column: 1 / -1;
+  }
+  .discovery-row.ui-item {
+    padding-inline: 0;
+    padding-block: 12px;
+  }
+  .code-text {
+    color: var(--a00-muted);
+    font: 400 13px/1.5 var(--a00-font-code);
+    overflow-wrap: anywhere;
+  }
+
+  /* ---------- Forms ---------- */
+  .form-grid {
+    gap: 24px 16px;
+  }
+  @media (min-width: 768px) {
+    .form-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  .ui-dialog .form-grid {
+    gap: 24px 16px;
+  }
+  @media (min-width: 720px) {
+    .ui-dialog .form-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  .form-wide {
+    grid-column: 1 / -1;
+  }
+  .settings-form {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .settings-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .form-actions {
+    display: flex;
+  }
+  @media (max-width: 640px) {
+    .form-actions > .ui-button {
+      width: 100%;
+    }
+  }
+  .profiles {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .profile-row.ui-item {
+    padding: 12px;
+    border-color: var(--a00-border);
+  }
+  .profile-row .ui-item-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+  @media (max-width: 480px) {
+    .profile-row .ui-item-actions {
+      flex: 1 1 100%;
+    }
+    .profile-row .ui-item-actions > .ui-button {
+      flex: 1 1 auto;
+    }
+  }
+
+  /* ---------- Disks ---------- */
+  .disk-current {
+    color: var(--a00-muted);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .disk-row.ui-item {
+    padding-inline: 0;
+    padding-block: 12px;
+    padding-inline-start: calc(var(--depth, 0) * 24px);
+  }
+  .disk-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    color: var(--a00-muted);
+    font-size: 13px;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+  .disk-meta code {
+    font-size: 12px;
+  }
+}

@@ -1,0 +1,1883 @@
+/*
+ * Dozor web UI: components of design system "00" ported to plain CSS.
+ *
+ * Source: monorepo-frontend commit e405f620, packages/00/src (ui/* and components/Atmosphere*).
+ * The React/Base UI markup is replaced by native elements; the CSS values (sizes, radii, motion, states) are kept.
+ * Class prefix is "ui-"; the props of the React components became data attributes:
+ *   .ui-button[data-variant="default|outline|secondary|ghost|destructive|link"][data-size="default|sm|xs|lg|icon|icon-sm|icon-xs|icon-lg"]
+ *   .ui-badge[data-variant="default|secondary|destructive|outline|success|warning|info"]
+ *   .ui-alert[data-variant="default|destructive|success|warning|info"]
+ * Only var(--a00-*) tokens are used here; raw colours live in tokens.css.
+ */
+
+/* =====================================================================================================
+   Base elements
+   ===================================================================================================== */
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+  html {
+    background: var(--a00-ground);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    scroll-padding-block: 24px 112px;
+  }
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+    margin: 0;
+    color: var(--a00-ink);
+    background: var(--a00-ground);
+    font: 400 15px/1.55 var(--a00-font);
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  h1, h2, h3, h4, p, ul, ol, dl, dd, figure, fieldset {
+    margin: 0;
+  }
+  ul, ol {
+    padding: 0;
+    list-style: none;
+  }
+  fieldset {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+  button, input, select, textarea {
+    margin: 0;
+    color: inherit;
+    font: inherit;
+  }
+  img, svg, video {
+    display: block;
+    max-width: 100%;
+  }
+  a {
+    color: inherit;
+  }
+  code {
+    font-family: var(--a00-font-code);
+  }
+  /* The author's [hidden] must win over any display value of the component classes. */
+  [hidden] {
+    display: none !important;
+  }
+  /* 00.md section 10.1: focus is a 2px accent outline with 4px offset, visible whatever hovers. */
+  :focus-visible {
+    outline: 2px solid var(--a00-accent);
+    outline-offset: 4px;
+  }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+
+@layer components {
+  /* ---------- Icons (00.md section 9.3): stroke 1.5, round, currentColor, 16/20/24, non-scaling stroke ---------- */
+  .ui-icon {
+    display: inline-block;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+  .ui-icon[data-size="16"] {
+    width: 16px;
+    height: 16px;
+  }
+  .ui-icon[data-size="24"] {
+    width: 24px;
+    height: 24px;
+  }
+  /* vector-effect is not inherited: it has to reach the shapes inside the sprite symbols. */
+  symbol :is(path, circle, rect, line, polyline, polygon, ellipse) {
+    vector-effect: non-scaling-stroke;
+  }
+
+  /* ---------- Button: packages/00/src/ui/button/button.module.css ---------- */
+  .ui-button {
+    position: relative;
+    box-sizing: border-box;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 48px;
+    max-width: 100%;
+    margin: 0;
+    padding: 12px 22px;
+    border: 1px solid var(--a00-accent);
+    border-radius: var(--a00-radius-control);
+    color: var(--a00-on-accent);
+    background: var(--a00-primary-fill);
+    font: 500 14px/1.4 var(--a00-font-ui);
+    text-align: center;
+    text-decoration: none;
+    vertical-align: middle;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      translate var(--a00-duration-ui) var(--a00-ease),
+      background-color var(--a00-duration-ui) var(--a00-ease),
+      border-color var(--a00-duration-ui) var(--a00-ease);
+  }
+  /* The hit area is at least 44 x 44 px even where the visible box is smaller. */
+  .ui-button::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    translate: -50% -50%;
+  }
+  .ui-button:has([data-icon="inline-start"]) {
+    padding-inline-start: 16px;
+  }
+  .ui-button:has([data-icon="inline-end"]) {
+    padding-inline-end: 16px;
+  }
+  .ui-button[aria-invalid="true"] {
+    border-color: var(--a00-danger);
+  }
+  .ui-button:disabled,
+  .ui-button[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .ui-button[aria-busy="true"] {
+    cursor: progress;
+  }
+  .ui-button[data-variant="outline"] {
+    color: var(--a00-ink);
+    background: var(--a00-surface);
+    border-color: var(--a00-ink);
+  }
+  .ui-button[data-variant="secondary"] {
+    color: var(--a00-ink);
+    background: var(--a00-soft);
+    border-color: transparent;
+  }
+  .ui-button[data-variant="ghost"] {
+    color: var(--a00-ink);
+    background: transparent;
+    border-color: transparent;
+  }
+  /* Product composition (not a 00 variant): a ghost button that means deletion keeps the danger text colour. */
+  .ui-button[data-variant="ghost"][data-tone="danger"] {
+    color: var(--a00-danger);
+  }
+  .ui-button[data-variant="destructive"] {
+    color: var(--a00-danger);
+    background: var(--a00-danger-soft);
+    border-color: transparent;
+  }
+  .ui-button[data-variant="link"] {
+    min-height: 0;
+    padding-block: 4px;
+    padding-inline: 0;
+    border-color: transparent;
+    border-radius: var(--a00-radius-xs);
+    color: var(--a00-ink);
+    background: transparent;
+    font-weight: 400;
+    text-decoration: underline;
+    /* In 00 the underline is a 60% tint; the dark tint is black, so the underline is drawn in muted ink. */
+    text-decoration-color: var(--a00-muted);
+    text-underline-offset: 6px;
+  }
+  .ui-link {
+    border-radius: var(--a00-radius-xs);
+    color: var(--a00-ink);
+    text-decoration: underline;
+    text-decoration-color: var(--a00-muted);
+    text-underline-offset: 4px;
+  }
+  .ui-link:hover {
+    text-decoration-color: currentColor;
+  }
+  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    .ui-button:not([data-variant="ghost"], [data-variant="link"]):not(:disabled, [aria-disabled="true"]):hover {
+      translate: 0 -2px;
+    }
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .ui-button[data-variant="ghost"]:not(:disabled, [aria-disabled="true"]):hover {
+      background: var(--a00-soft);
+    }
+    .ui-button[data-variant="link"]:not(:disabled, [aria-disabled="true"]):hover {
+      text-decoration-color: currentColor;
+    }
+  }
+  /* Active returns the button to its place; it comes after hover so it wins the tie. */
+  .ui-button:not(:disabled, [aria-disabled="true"]):active {
+    translate: 0;
+  }
+  /* Sizes: visible heights 48 / 54 / 40 / 32, the hit area stays 44px through ::after. */
+  .ui-button[data-size="lg"] {
+    min-height: 54px;
+    padding: 14px 26px;
+  }
+  .ui-button[data-size="sm"] {
+    min-height: 40px;
+    padding: 8px 16px;
+  }
+  .ui-button[data-size="xs"] {
+    min-height: 32px;
+    padding: 4px 12px;
+    font-size: 13px;
+  }
+  .ui-button[data-size="sm"] .ui-icon,
+  .ui-button[data-size="xs"] .ui-icon,
+  .ui-button[data-size="icon-sm"] .ui-icon,
+  .ui-button[data-size="icon-xs"] .ui-icon {
+    width: 16px;
+    height: 16px;
+  }
+  .ui-button[data-size="lg"]:has([data-icon="inline-start"]) {
+    padding-inline-start: 20px;
+  }
+  .ui-button[data-size="lg"]:has([data-icon="inline-end"]) {
+    padding-inline-end: 20px;
+  }
+  .ui-button[data-size="sm"]:has([data-icon="inline-start"]) {
+    padding-inline-start: 12px;
+  }
+  .ui-button[data-size="sm"]:has([data-icon="inline-end"]) {
+    padding-inline-end: 12px;
+  }
+  .ui-button[data-size="xs"]:has([data-icon="inline-start"]) {
+    padding-inline-start: 8px;
+  }
+  .ui-button[data-size="xs"]:has([data-icon="inline-end"]) {
+    padding-inline-end: 8px;
+  }
+  .ui-button[data-size^="icon"] {
+    padding: 0;
+  }
+  .ui-button[data-size="icon"] {
+    width: 48px;
+  }
+  .ui-button[data-size="icon-lg"] {
+    width: 54px;
+    min-height: 54px;
+  }
+  .ui-button[data-size="icon-sm"] {
+    width: 40px;
+    min-height: 40px;
+  }
+  .ui-button[data-size="icon-xs"] {
+    width: 32px;
+    min-height: 32px;
+  }
+  .ui-button[data-variant="link"][data-size] {
+    min-height: 0;
+    padding-block: 4px;
+  }
+  .ui-button[data-variant="link"]:has([data-icon]) {
+    padding-inline: 0;
+  }
+  /* A full-width action: the label on the start edge, the icon on the end edge (00.md section 10.1). */
+  .ui-button[data-block] {
+    width: 100%;
+  }
+  .ui-button[data-block]:has([data-icon="inline-end"]) {
+    justify-content: space-between;
+  }
+
+  /* ---------- Card, material "paper" for every card of the product (00.md sections 7.1, 12):
+     packages/00/src/ui/card/card.module.css. No hover lift: no card here is a link. ---------- */
+  .ui-card {
+    --card-spacing: 28px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: var(--card-spacing);
+    min-width: 0;
+    padding-block: var(--card-spacing);
+    border: 1px solid var(--a00-border);
+    border-radius: var(--a00-radius-card);
+    color: var(--a00-ink);
+    background: var(--a00-surface);
+    /* Paper: a soft double shadow from the tint plus a lit top edge. The alphas are raised for the dark ground. */
+    box-shadow:
+      0 2px 3px rgba(var(--a00-tint-rgb), 0.1),
+      0 18px 46px rgba(var(--a00-tint-rgb), 0.3),
+      inset 0 1px 0 var(--a00-paper-edge);
+    font: 400 15px/1.55 var(--a00-font);
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+  }
+  .ui-card[data-size="sm"] {
+    --card-spacing: 20px;
+  }
+  @media (max-width: 1000px) {
+    .ui-card {
+      --card-spacing: 24px;
+    }
+    .ui-card[data-size="sm"] {
+      --card-spacing: 16px;
+    }
+  }
+  .ui-card-header {
+    display: grid;
+    grid-auto-rows: min-content;
+    align-items: start;
+    gap: 4px;
+    min-width: 0;
+    padding-inline: var(--card-spacing);
+  }
+  .ui-card-header:has(> .ui-card-action) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 16px;
+  }
+  .ui-card-header:has(> .ui-card-description) {
+    grid-template-rows: auto auto;
+  }
+  .ui-card-title {
+    min-width: 0;
+    color: inherit;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+  .ui-card[data-size="sm"] .ui-card-title {
+    font-size: 16px;
+  }
+  .ui-card-description {
+    min-width: 0;
+    color: var(--a00-muted);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .ui-card-action {
+    grid-column-start: 2;
+    grid-row: 1 / span 2;
+    align-self: start;
+    justify-self: end;
+  }
+  /* A narrow card: a sticker in the action cell would squeeze the description into a thin column
+     (00.md section 10.2), so on phones the description takes the full width under the title row. */
+  @media (max-width: 640px) {
+    .ui-card-header:has(> .ui-card-action) > .ui-card-description {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+    .ui-card-header:has(> .ui-card-action) > .ui-card-action {
+      grid-row: 1;
+    }
+  }
+  .ui-card-content {
+    min-width: 0;
+    padding-inline: var(--card-spacing);
+  }
+  .ui-card-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding-inline: var(--card-spacing);
+  }
+
+  /* ---------- Icon slot of a holographic sticker (00.md section 9.2): slot 56 / image 48, on phones 44 / 40.
+     Stickers are bitmaps with their own palette: never recoloured, no filters. ---------- */
+  .ui-icon-slot {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    vertical-align: middle;
+    pointer-events: none;
+  }
+  .ui-icon-slot > img {
+    display: block;
+    width: 48px;
+    height: 48px;
+  }
+  @media (max-width: 640px) {
+    .ui-icon-slot {
+      width: 44px;
+      height: 44px;
+    }
+    .ui-icon-slot > img {
+      width: 40px;
+      height: 40px;
+    }
+  }
+
+  /* ---------- Field: packages/00/src/ui/field/field.module.css ---------- */
+  .ui-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+  .ui-field-group {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px 16px;
+    min-width: 0;
+  }
+  .ui-label {
+    width: fit-content;
+    max-width: 100%;
+    color: var(--a00-ink);
+    font: 500 14px/1.4 var(--a00-font-ui);
+    overflow-wrap: anywhere;
+  }
+  .ui-hint {
+    color: var(--a00-muted);
+    font: 400 14px/1.5 var(--a00-font-ui);
+    text-wrap: pretty;
+    overflow-wrap: anywhere;
+  }
+  .ui-field > .ui-label + .ui-hint {
+    margin-top: -4px;
+  }
+  .ui-error {
+    color: var(--a00-danger);
+    font: 400 14px/1.5 var(--a00-font-ui);
+    overflow-wrap: anywhere;
+  }
+  .ui-field[data-invalid] .ui-label {
+    color: var(--a00-danger);
+  }
+
+  /* ---------- Control box: input, textarea, select, input group (packages/00/src/ui/_internal/shared.module.css .control) ---------- */
+  .ui-input,
+  .ui-textarea,
+  .ui-select {
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 48px;
+    padding: 12px;
+    color: var(--a00-ink);
+    background: var(--a00-surface);
+    border: 1px solid var(--a00-control-border);
+    border-radius: var(--a00-radius-control);
+    font: 400 16px/1.4 var(--a00-font-ui);
+    transition:
+      border-color var(--a00-duration-ui) var(--a00-ease),
+      opacity var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-input::placeholder,
+  .ui-textarea::placeholder {
+    color: var(--a00-muted);
+    opacity: 1;
+  }
+  .ui-input:focus-visible,
+  .ui-textarea:focus-visible,
+  .ui-select:focus-visible {
+    outline: 2px solid var(--a00-accent);
+    outline-offset: 4px;
+  }
+  .ui-input[aria-invalid="true"],
+  .ui-textarea[aria-invalid="true"],
+  .ui-select[aria-invalid="true"] {
+    border-color: var(--a00-danger);
+  }
+  .ui-input:disabled,
+  .ui-textarea:disabled,
+  .ui-select:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .ui-input[readonly],
+  .ui-textarea[readonly] {
+    background: var(--a00-soft);
+  }
+  /* Chrome paints autofilled fields blue or yellow; keep the surface and the ink. */
+  .ui-input:-webkit-autofill {
+    -webkit-text-fill-color: var(--a00-ink);
+    box-shadow: 0 0 0 100px var(--a00-surface) inset;
+  }
+  .ui-input[type="date"] {
+    height: 48px;
+    padding-block: 8px;
+  }
+  .ui-input[type="date"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+  }
+  .ui-input[type="number"] {
+    font-variant-numeric: tabular-nums;
+  }
+  .ui-textarea {
+    min-height: 96px;
+    resize: vertical;
+  }
+  .ui-textarea[data-code],
+  .ui-input[data-code] {
+    font-family: var(--a00-font-code);
+    font-size: 14px;
+  }
+
+  /* Native select: packages/00/src/ui/native-select/native-select.module.css (appearance reset + own chevron). */
+  .ui-select-wrap {
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+  }
+  .ui-select {
+    padding-inline-end: 44px;
+    appearance: none;
+    -webkit-appearance: none;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .ui-select option {
+    color: var(--a00-ink);
+    background-color: var(--a00-surface);
+  }
+  .ui-select-icon {
+    position: absolute;
+    top: 50%;
+    inset-inline-end: 12px;
+    translate: 0 -50%;
+    color: var(--a00-muted);
+  }
+  .ui-select:disabled ~ .ui-select-icon {
+    opacity: 0.5;
+  }
+
+  /* Input group with a unit suffix: packages/00/src/ui/input-group/input-group.module.css */
+  .ui-input-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    min-height: 48px;
+    color: var(--a00-ink);
+    background: var(--a00-surface);
+    border: 1px solid var(--a00-control-border);
+    border-radius: var(--a00-radius-control);
+    font: 400 16px/1.4 var(--a00-font-ui);
+    transition: border-color var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-input-group:has(.ui-input:focus-visible) {
+    outline: 2px solid var(--a00-accent);
+    outline-offset: 4px;
+  }
+  .ui-input-group:has(.ui-input[aria-invalid="true"]) {
+    border-color: var(--a00-danger);
+  }
+  .ui-input-group > .ui-input {
+    flex: 1 1 0%;
+    min-height: 0;
+    padding-inline-end: 8px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+  }
+  .ui-input-group > .ui-input:focus-visible {
+    outline: none;
+  }
+  .ui-input-group-addon {
+    order: 1;
+    display: flex;
+    align-items: center;
+    padding-inline: 0 12px;
+    color: var(--a00-muted);
+    font: 500 14px/1.4 var(--a00-font-ui);
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  /* Checkbox: packages/00/src/ui/checkbox/checkbox.module.css (20 x 20, radius xs; the label row is the hit area). */
+  .ui-checkbox {
+    position: relative;
+    flex: none;
+    appearance: none;
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    border: 1px solid var(--a00-control-border);
+    border-radius: var(--a00-radius-xs);
+    background: var(--a00-surface);
+    cursor: pointer;
+    transition:
+      background-color var(--a00-duration-ui) var(--a00-ease),
+      border-color var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-checkbox:checked {
+    background: var(--a00-accent);
+    border-color: var(--a00-accent);
+  }
+  .ui-checkbox:checked::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 6px;
+    width: 5px;
+    height: 10px;
+    border: solid var(--a00-on-accent);
+    border-width: 0 1.5px 1.5px 0;
+    rotate: 45deg;
+  }
+  .ui-checkbox[aria-invalid="true"] {
+    border-color: var(--a00-danger);
+  }
+  .ui-checkbox:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  /* Switch: packages/00/src/ui/switch/switch.module.css, as a native <input type="checkbox" role="switch">.
+     44 x 26, thumb 16, 4px between the thumb and the border. */
+  .ui-switch {
+    --switch-width: 44px;
+    --switch-height: 26px;
+    --switch-thumb: 16px;
+    --switch-gap: 4px;
+    position: relative;
+    flex: none;
+    appearance: none;
+    -webkit-appearance: none;
+    width: var(--switch-width);
+    height: var(--switch-height);
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--a00-control-border);
+    border-radius: 999px;
+    background: var(--a00-surface);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background-color var(--a00-duration-ui) var(--a00-ease),
+      border-color var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-switch::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: var(--switch-gap);
+    width: var(--switch-thumb);
+    height: var(--switch-thumb);
+    border-radius: 50%;
+    background: var(--a00-accent);
+    translate: 0 -50%;
+    transition:
+      translate var(--a00-duration-ui) var(--a00-ease),
+      background-color var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-switch:checked {
+    background: var(--a00-accent);
+    border-color: var(--a00-accent);
+  }
+  /* Travel = inner width (outer minus 2 borders) minus the thumb minus the gaps on both sides: 18px. */
+  .ui-switch:checked::before {
+    background: var(--a00-on-accent);
+    translate: calc(var(--switch-width) - 2px - var(--switch-thumb) - 2 * var(--switch-gap)) -50%;
+  }
+  .ui-switch:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .ui-switch[aria-invalid="true"] {
+    border-color: var(--a00-danger);
+  }
+  /* A row with a switch or a checkbox: at least 44px tall, and the label fills it, so the whole row is the hit area. */
+  .ui-check {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    padding-block: 9px;
+    cursor: pointer;
+  }
+  .ui-check > .ui-switch,
+  .ui-check > .ui-checkbox {
+    margin-top: 0;
+  }
+  .ui-check > .ui-checkbox {
+    margin-top: 2px;
+  }
+  .ui-check-text {
+    display: flex;
+    flex: 1 1 0%;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    font: 500 14px/1.4 var(--a00-font-ui);
+    overflow-wrap: anywhere;
+  }
+  .ui-check-text > .ui-hint {
+    font-weight: 400;
+  }
+  .ui-check:has(:disabled) {
+    cursor: not-allowed;
+  }
+
+  /* Slider: packages/00/src/ui/slider/slider.module.css, as a styled native <input type="range">.
+     Track 6px (soft, 1px --a00-border edge, accent fill up to the thumb), thumb 20px with a 2px accent ring,
+     pressable strip 44px. --p (0..1) is the position, set from JS. */
+  .ui-slider {
+    --p: 0;
+    --thumb: 20px;
+    --fill: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--p));
+    appearance: none;
+    -webkit-appearance: none;
+    display: block;
+    width: 100%;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    touch-action: pan-y;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ui-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: var(--a00-radius-xs);
+    background: linear-gradient(90deg, var(--a00-accent) 0 var(--fill), var(--a00-soft) var(--fill) 100%);
+    box-shadow: inset 0 0 0 1px var(--a00-border);
+  }
+  .ui-slider::-moz-range-track {
+    height: 6px;
+    border-radius: var(--a00-radius-xs);
+    background: linear-gradient(90deg, var(--a00-accent) 0 var(--fill), var(--a00-soft) var(--fill) 100%);
+    box-shadow: inset 0 0 0 1px var(--a00-border);
+  }
+  .ui-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    box-sizing: border-box;
+    width: var(--thumb);
+    height: var(--thumb);
+    margin-top: -7px;
+    border: 2px solid var(--a00-accent);
+    border-radius: 50%;
+    background: var(--a00-surface);
+    cursor: grab;
+    transition: box-shadow var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-slider::-moz-range-thumb {
+    box-sizing: border-box;
+    width: var(--thumb);
+    height: var(--thumb);
+    border: 2px solid var(--a00-accent);
+    border-radius: 50%;
+    background: var(--a00-surface);
+    cursor: grab;
+    transition: box-shadow var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-slider:active::-webkit-slider-thumb {
+    cursor: grabbing;
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--a00-ink) 16%, transparent);
+  }
+  .ui-slider:active::-moz-range-thumb {
+    cursor: grabbing;
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--a00-ink) 16%, transparent);
+  }
+  /* The input itself is focused, but the ring belongs to the thumb. */
+  .ui-slider:focus-visible {
+    outline: none;
+  }
+  .ui-slider:focus-visible::-webkit-slider-thumb {
+    outline: 2px solid var(--a00-accent);
+    outline-offset: 4px;
+  }
+  .ui-slider:focus-visible::-moz-range-thumb {
+    outline: 2px solid var(--a00-accent);
+    outline-offset: 4px;
+  }
+  .ui-slider:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  /* ---------- Badge: packages/00/src/ui/badge/badge.module.css (radius sm, height 24, Geist 12/500) ---------- */
+  .ui-badge {
+    box-sizing: border-box;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: fit-content;
+    max-width: 100%;
+    min-height: 24px;
+    margin: 0;
+    padding: 2px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--a00-radius-sm);
+    color: var(--a00-on-accent);
+    background: var(--a00-primary-fill);
+    font: 500 12px/1.5 var(--a00-font-ui);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    vertical-align: middle;
+    overflow-wrap: anywhere;
+  }
+  .ui-badge > .ui-icon {
+    width: 16px;
+    height: 16px;
+  }
+  .ui-badge[data-variant="secondary"] {
+    color: var(--a00-ink);
+    background: var(--a00-soft);
+  }
+  .ui-badge[data-variant="destructive"] {
+    color: var(--a00-danger);
+    background: var(--a00-danger-soft);
+  }
+  .ui-badge[data-variant="outline"] {
+    color: var(--a00-ink);
+    background: transparent;
+    border-color: var(--a00-control-border);
+  }
+  .ui-badge[data-variant="success"] {
+    color: var(--a00-success);
+    background: var(--a00-success-soft);
+  }
+  .ui-badge[data-variant="warning"] {
+    color: var(--a00-warning);
+    background: var(--a00-warning-soft);
+  }
+  .ui-badge[data-variant="info"] {
+    color: var(--a00-info);
+    background: var(--a00-info-soft);
+  }
+
+  /* ---------- Alert: packages/00/src/ui/alert/alert.module.css ---------- */
+  .ui-alert {
+    --ui-alert-tone: var(--a00-ink);
+    position: relative;
+    box-sizing: border-box;
+    container-type: inline-size;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-columns: auto;
+    align-items: start;
+    column-gap: 12px;
+    width: 100%;
+    padding: 16px;
+    border: 1px solid var(--a00-control-border);
+    border-radius: var(--a00-radius-md);
+    color: var(--ui-alert-tone);
+    background: var(--a00-surface);
+    font: 400 14px/1.5 var(--a00-font-ui);
+    text-align: start;
+    overflow-wrap: anywhere;
+  }
+  .ui-alert:has(> .ui-icon) {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .ui-alert > .ui-icon {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    color: currentColor;
+  }
+  .ui-alert-title,
+  .ui-alert-description {
+    grid-column: 1;
+    min-width: 0;
+  }
+  .ui-alert:has(> .ui-icon) > .ui-alert-title,
+  .ui-alert:has(> .ui-icon) > .ui-alert-description {
+    grid-column: 2;
+  }
+  .ui-alert-title {
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  .ui-alert-description {
+    color: var(--a00-muted);
+    text-wrap: pretty;
+  }
+  .ui-alert-description p:not(:last-child) {
+    margin-bottom: 8px;
+  }
+  .ui-alert-title + .ui-alert-description {
+    margin-top: 2px;
+  }
+  /* The action takes its own column: the width of a Russian button label is not known in advance. */
+  .ui-alert-action {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: start;
+    justify-self: end;
+    margin-inline-start: 4px;
+  }
+  .ui-alert:has(> .ui-icon) > .ui-alert-action {
+    grid-column: 3;
+  }
+  .ui-alert[data-variant="destructive"] {
+    --ui-alert-tone: var(--a00-danger);
+    background: var(--a00-danger-soft);
+    border-color: color-mix(in srgb, var(--a00-danger) 40%, transparent);
+  }
+  .ui-alert[data-variant="success"] {
+    --ui-alert-tone: var(--a00-success);
+    background: var(--a00-success-soft);
+    border-color: color-mix(in srgb, var(--a00-success) 40%, transparent);
+  }
+  .ui-alert[data-variant="warning"] {
+    --ui-alert-tone: var(--a00-warning);
+    background: var(--a00-warning-soft);
+    border-color: color-mix(in srgb, var(--a00-warning) 40%, transparent);
+  }
+  .ui-alert[data-variant="info"] {
+    --ui-alert-tone: var(--a00-info);
+    background: var(--a00-info-soft);
+    border-color: color-mix(in srgb, var(--a00-info) 40%, transparent);
+  }
+  /* Muted text on a tinted background is under 4.5:1, so the description takes the status colour. */
+  .ui-alert[data-variant="destructive"] .ui-alert-description,
+  .ui-alert[data-variant="success"] .ui-alert-description,
+  .ui-alert[data-variant="warning"] .ui-alert-description,
+  .ui-alert[data-variant="info"] .ui-alert-description {
+    color: var(--ui-alert-tone);
+  }
+  /* A narrow alert: the action goes under the text, aligned with it. */
+  @container (max-width: 440px) {
+    .ui-alert-action {
+      grid-column: 1;
+      grid-row: auto;
+      justify-self: start;
+      margin-inline-start: 0;
+      margin-top: 12px;
+    }
+    .ui-alert:has(> .ui-icon) > .ui-alert-action {
+      grid-column: 2;
+    }
+  }
+
+  /* ---------- Toast: packages/00/src/ui/toast/toast.module.css
+     Outline plus a 4px status stripe on the start edge, no shadow, layer 70, polite live region. ---------- */
+  .ui-toast-viewport {
+    position: fixed;
+    z-index: 70;
+    right: 16px;
+    bottom: var(--a00-toast-bottom, calc(16px + env(safe-area-inset-bottom, 0px)));
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(380px, calc(100% - 32px));
+    pointer-events: none;
+  }
+  .ui-toast-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .ui-toast {
+    --stripe: var(--a00-control-border);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    box-sizing: border-box;
+    width: 100%;
+    padding: 16px;
+    color: var(--a00-ink);
+    background: var(--a00-surface);
+    border: 1px solid var(--a00-border);
+    border-inline-start: 4px solid var(--stripe);
+    border-radius: var(--a00-radius-lg);
+    box-shadow: none;
+    font: 400 14px/1.4 var(--a00-font-ui);
+    pointer-events: auto;
+    animation: ui-toast-in calc(var(--a00-duration-ui) * 0.75) var(--a00-ease) backwards;
+    transition: opacity 160ms var(--a00-ease);
+  }
+  .ui-toast[data-closing] {
+    opacity: 0;
+  }
+  .ui-toast[data-type="success"] {
+    --stripe: var(--a00-success);
+  }
+  .ui-toast[data-type="info"] {
+    --stripe: var(--a00-info);
+  }
+  .ui-toast[data-type="warning"] {
+    --stripe: var(--a00-warning);
+  }
+  .ui-toast[data-type="error"] {
+    --stripe: var(--a00-danger);
+  }
+  .ui-toast-icon {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-block: -4px;
+    border-radius: var(--a00-radius-md);
+    color: var(--a00-ink);
+    background: var(--a00-soft);
+  }
+  .ui-toast[data-type="success"] .ui-toast-icon {
+    color: var(--a00-success);
+    background: var(--a00-success-soft);
+  }
+  .ui-toast[data-type="info"] .ui-toast-icon {
+    color: var(--a00-info);
+    background: var(--a00-info-soft);
+  }
+  .ui-toast[data-type="warning"] .ui-toast-icon {
+    color: var(--a00-warning);
+    background: var(--a00-warning-soft);
+  }
+  .ui-toast[data-type="error"] .ui-toast-icon {
+    color: var(--a00-danger);
+    background: var(--a00-danger-soft);
+  }
+  .ui-toast-text {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  /* The close button is 40px with a 44px hit area; the negative margins keep a one-line toast compact. */
+  .ui-toast-close {
+    flex-shrink: 0;
+    margin-block: -8px;
+    margin-inline-end: -8px;
+    color: var(--a00-muted);
+  }
+  @keyframes ui-toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @media (max-width: 359px) {
+    .ui-toast {
+      padding: 12px;
+    }
+  }
+
+  /* ---------- Dialog and alert dialog: native <dialog> + showModal(), packages/00/src/ui/dialog and alert-dialog
+     plus components/AtmosphereDialog. Surface radius xl, Cormorant title 30px (26px under 360px).
+     Up to 640px the window becomes a bottom sheet with only the top corners rounded. ---------- */
+  .ui-dialog {
+    position: fixed;
+    inset: 0;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: min(560px, calc(100% - 32px));
+    height: fit-content;
+    max-height: calc(100dvh - 48px);
+    margin: auto;
+    --dialog-pad: 24px;
+    --dialog-pad-b: var(--dialog-pad);
+    padding: var(--dialog-pad) var(--dialog-pad) var(--dialog-pad-b);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    color: var(--a00-ink);
+    background: var(--a00-surface);
+    border: 1px solid var(--a00-border);
+    border-radius: var(--a00-radius-xl);
+    box-shadow: var(--a00-overlay-shadow);
+    font: 400 16px/1.5 var(--a00-font-ui);
+  }
+  /* display is set only while open: the UA rule dialog:not([open]) keeps a closed dialog out of the page. */
+  .ui-dialog[open] {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    animation: ui-dialog-in calc(var(--a00-duration-ui) * 0.75) var(--a00-ease) both;
+  }
+  .ui-dialog[data-size="sm"] {
+    max-width: min(440px, calc(100% - 32px));
+  }
+  .ui-dialog[data-size="lg"] {
+    max-width: min(760px, calc(100% - 32px));
+  }
+  .ui-dialog::backdrop {
+    background: var(--a00-overlay);
+  }
+  .ui-dialog:focus-visible {
+    outline: none;
+  }
+  .ui-dialog-close {
+    position: absolute;
+    top: 12px;
+    inset-inline-end: 12px;
+  }
+  .ui-dialog-header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    padding-inline-end: 40px;
+  }
+  .ui-dialog-title {
+    color: var(--a00-ink);
+    font: 600 30px/1.15 var(--a00-font-display);
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+  .ui-dialog-description {
+    color: var(--a00-muted);
+    font: 400 16px/1.5 var(--a00-font-ui);
+    text-wrap: pretty;
+    overflow-wrap: anywhere;
+  }
+  .ui-dialog-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+  }
+  /* Actions sit on the end edge and wrap; the primary one is last in the DOM and goes on top when they stack on a phone. */
+  /* The actions stay in view in a long form: sticky over the bottom padding of the window. */
+  .ui-dialog-footer {
+    position: sticky;
+    bottom: calc(-1 * var(--dialog-pad-b));
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-bottom: calc(-1 * var(--dialog-pad-b));
+    padding-block: 12px var(--dialog-pad-b);
+    background: var(--a00-surface);
+  }
+  /* Alerts of the actions keep clear of the sticky footer when they are scrolled into view. */
+  @media (min-width: 641px) {
+    .ui-dialog-body > .ui-alert,
+    .ui-dialog-body > .profiles,
+    .ui-dialog-body > .ui-hint[role="status"] {
+      scroll-margin-block-end: 96px;
+    }
+  }
+  @keyframes ui-dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes ui-sheet-in {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: none;
+    }
+  }
+  @media (max-width: 640px) {
+    .ui-dialog {
+      inset: auto 0 0;
+      width: 100%;
+      max-width: 100%;
+      max-height: 92dvh;
+      margin: 0;
+      border-radius: var(--a00-radius-xl) var(--a00-radius-xl) 0 0;
+      border-bottom-width: 0;
+      --dialog-pad-b: max(var(--dialog-pad), env(safe-area-inset-bottom, 0px));
+    }
+    .ui-dialog[open],
+    .ui-dialog[data-size][open] {
+      max-width: 100%;
+      animation-name: ui-sheet-in;
+    }
+    /* Stacked actions are tall: on a phone they scroll with the form instead of covering it. */
+    .ui-dialog-footer {
+      position: static;
+      flex-direction: column-reverse;
+      align-items: stretch;
+      margin-bottom: 0;
+      padding-block: 0;
+      background: none;
+    }
+    .ui-dialog-footer > .ui-button {
+      width: 100%;
+    }
+  }
+  @media (max-width: 359px) {
+    .ui-dialog {
+      --dialog-pad: 16px;
+    }
+    .ui-dialog-title {
+      font-size: 26px;
+    }
+    .ui-dialog-header {
+      padding-inline-end: 40px;
+    }
+  }
+
+  /* ---------- Item and list rows: packages/00/src/ui/item/item.module.css ---------- */
+  .ui-item-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .ui-item {
+    position: relative;
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    margin: 0;
+    padding: 12px 16px;
+    border: 1px solid transparent;
+    border-radius: var(--a00-radius-md);
+    color: var(--a00-ink);
+    background: transparent;
+    font: 400 14px/1.4 var(--a00-font-ui);
+    text-align: start;
+    text-decoration: none;
+    overflow-wrap: anywhere;
+    transition: background-color var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-item[data-variant="outline"] {
+    border-color: var(--a00-border);
+  }
+  .ui-item:is(button, a) {
+    cursor: pointer;
+  }
+  .ui-item[data-size="sm"] {
+    padding: 10px 12px;
+  }
+  .ui-item-content {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    gap: 2px;
+    min-width: min(100%, 9rem);
+  }
+  .ui-item-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    max-width: 100%;
+    font: 600 14px/1.35 var(--a00-font-ui);
+  }
+  .ui-item-description {
+    color: var(--a00-muted);
+    font: 400 14px/1.5 var(--a00-font-ui);
+    text-wrap: pretty;
+  }
+  .ui-item-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+  }
+  /* A row separated from the next one by a hairline (lists inside a card). */
+  .ui-item-list[data-divided] {
+    gap: 0;
+  }
+  .ui-item-list[data-divided] > li + li {
+    border-top: 1px solid var(--a00-border);
+  }
+  .ui-item-list[data-divided] > li > .ui-item {
+    border-radius: 0;
+  }
+  /* Selectable rows (events): the selected one gets a soft plate and an indicator bar; the state is also aria-current. */
+  .ui-item[aria-current="true"] {
+    background: var(--a00-soft);
+    box-shadow: inset 3px 0 0 var(--a00-accent);
+  }
+  .ui-item[aria-current="true"] .ui-item-title {
+    font-weight: 700;
+  }
+  /* 00.md section 10.2: a secondary badge in a row of the same tone is outlined, or it merges with the row. */
+  .ui-item[aria-current="true"] .ui-badge[data-variant="secondary"] {
+    border-color: var(--a00-control-border);
+  }
+  .ui-item:is(button, a):focus-visible {
+    outline-offset: -2px;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .ui-item:is(button, a):hover {
+      background: var(--a00-soft);
+    }
+    .ui-item:is(button, a):hover .ui-badge[data-variant="secondary"] {
+      border-color: var(--a00-control-border);
+    }
+  }
+
+  /* ---------- Empty state: packages/00/src/ui/empty/empty.module.css ---------- */
+  .ui-empty {
+    box-sizing: border-box;
+    display: flex;
+    flex: 1 1 0%;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    width: 100%;
+    min-width: 0;
+    padding: 48px 24px;
+    border: 0 dashed var(--a00-control-border);
+    border-radius: var(--a00-radius-md);
+    color: var(--a00-ink);
+    font: 400 14px/1.5 var(--a00-font-ui);
+    text-align: center;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+  .ui-empty[data-bordered] {
+    border-width: 1px;
+  }
+  .ui-empty-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    max-width: 384px;
+    min-width: 0;
+  }
+  .ui-empty-media {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 8px;
+  }
+  .ui-empty-title {
+    color: inherit;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.02em;
+  }
+  .ui-empty-description {
+    color: var(--a00-muted);
+    font-size: 14px;
+    line-height: 1.6;
+    text-wrap: pretty;
+  }
+  .ui-empty-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    max-width: 384px;
+    min-width: 0;
+  }
+  .ui-empty[data-compact] {
+    padding: 24px 16px;
+  }
+  @media (max-width: 640px) {
+    .ui-empty {
+      padding: 32px 16px;
+    }
+  }
+
+  /* ---------- Skeleton and spinner: packages/00/src/ui/skeleton, ui/spinner ---------- */
+  .ui-skeleton {
+    position: relative;
+    overflow: hidden;
+    min-height: 16px;
+    border-radius: var(--a00-radius-md);
+    background: var(--a00-soft);
+  }
+  .ui-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent 0%, var(--a00-surface) 50%, transparent 100%);
+    opacity: 0.8;
+    translate: -100% 0;
+    animation: ui-sweep 1600ms var(--a00-ease-inout) infinite;
+  }
+  @keyframes ui-sweep {
+    to {
+      translate: 100% 0;
+    }
+  }
+  /* The spinner loops only while something loads; it is removed from the DOM afterwards. */
+  .ui-spinner {
+    display: inline-block;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    animation: ui-spin 900ms linear infinite;
+  }
+  .ui-spinner[data-size="20"] {
+    width: 20px;
+    height: 20px;
+  }
+  .ui-spinner[data-size="24"] {
+    width: 24px;
+    height: 24px;
+  }
+  @keyframes ui-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .ui-loading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--a00-muted);
+    font: 400 14px/1.5 var(--a00-font-ui);
+  }
+
+  /* ---------- Toggle group (the parts of an event): packages/00/src/ui/toggle, ui/toggle-group.
+     Pressed = accent fill with --a00-on-accent text. The toggles do not lift: they sit in a row. ---------- */
+  .ui-toggle-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .ui-toggle {
+    position: relative;
+    box-sizing: border-box;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 48px;
+    min-height: 40px;
+    max-width: 100%;
+    margin: 0;
+    padding: 8px 14px;
+    border: 1px solid var(--a00-control-border);
+    border-radius: var(--a00-radius-md);
+    color: var(--a00-ink);
+    background: var(--a00-surface);
+    font: 500 14px/1.4 var(--a00-font-ui);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background-color var(--a00-duration-ui) var(--a00-ease),
+      border-color var(--a00-duration-ui) var(--a00-ease),
+      color var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-toggle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    translate: -50% -50%;
+  }
+  .ui-toggle[aria-pressed="true"] {
+    color: var(--a00-on-accent);
+    background: var(--a00-accent);
+    border-color: var(--a00-accent);
+  }
+  .ui-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .ui-toggle:not([aria-pressed="true"], :disabled):hover {
+      background: var(--a00-soft);
+    }
+  }
+
+  /* ---------- Separator ---------- */
+  .ui-separator {
+    flex-shrink: 0;
+    width: 100%;
+    height: 1px;
+    margin: 0;
+    border: 0;
+    background: var(--a00-border);
+  }
+
+  /* ---------- Technical metric and barcode meter: packages/00/src/components/AtmosphereData/data.module.css ---------- */
+  .ui-metric-label {
+    color: var(--a00-muted);
+    font: 500 14px/1.5 var(--a00-font-ui);
+  }
+  .ui-metric-value {
+    margin-top: 4px;
+    font: 600 30px/1.25 var(--a00-font-ui);
+    font-variant-numeric: tabular-nums;
+  }
+  .ui-metric-unit {
+    font-size: 16px;
+    font-weight: 500;
+  }
+  .ui-metric-hint {
+    margin-top: 8px;
+    color: var(--a00-muted);
+    font: 400 14px/1.5 var(--a00-font-ui);
+  }
+  /* The scale of the meter is drawn by a repeating gradient (the source masks a solid fill with the same 2px/4px
+     stripes; a gradient needs no raw colour). The track is --a00-marker, the fill is ink. */
+  .ui-meter {
+    position: relative;
+    height: 12px;
+    background: repeating-linear-gradient(90deg, var(--a00-marker) 0 2px, transparent 2px 4px);
+  }
+  .ui-meter::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--meter-fill, 0%);
+    background: repeating-linear-gradient(90deg, var(--a00-ink) 0 2px, transparent 2px 4px);
+  }
+
+  /* ---------- Status screen (static "loading" and error variants): packages/00/src/components/AtmosphereStatusScreen.
+     The pending variant is the reduced-motion / no-JS fallback of the original: a static word, no morphing. ---------- */
+  .ui-status-screen {
+    --st-pad: 24px;
+    position: relative;
+    isolation: isolate;
+    container-type: inline-size;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    place-items: center;
+    width: 100%;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 48px var(--st-pad);
+    overflow: clip;
+    color: var(--a00-ink);
+    background: var(--a00-ground);
+    font-family: var(--a00-font-ui);
+    text-align: center;
+  }
+  .ui-status-screen[data-tone="pending"] {
+    grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+  /* The one soft light of the screen (00.md section 7.3): a pale halo behind the word; the error tints it with danger-soft. */
+  .ui-status-screen::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    left: 50%;
+    top: 50%;
+    width: min(1200px, 150vw);
+    height: min(760px, 100vw);
+    translate: -50% -50%;
+    border-radius: 50%;
+    background: radial-gradient(
+      closest-side,
+      color-mix(in srgb, var(--a00-surface) 100%, transparent) 0%,
+      color-mix(in srgb, var(--a00-surface) 62%, transparent) 46%,
+      transparent 100%
+    );
+    pointer-events: none;
+  }
+  .ui-status-screen[data-tone="error"]::before {
+    background: radial-gradient(
+      closest-side,
+      color-mix(in srgb, var(--a00-danger-soft) 78%, transparent) 0%,
+      color-mix(in srgb, var(--a00-danger-soft) 36%, transparent) 50%,
+      transparent 100%
+    );
+  }
+  .ui-status-word {
+    grid-row: 2;
+    min-width: 0;
+    color: var(--a00-ink);
+    font-family: var(--a00-font-display);
+    font-size: min(clamp(64px, 14vw, 220px), calc((100vw - 2 * var(--st-pad)) / 5.6));
+    font-size: min(clamp(64px, 14cqw, 220px), calc(100cqw / 5.6));
+    font-weight: 600;
+    line-height: 0.9;
+    white-space: nowrap;
+    text-transform: uppercase;
+    font-synthesis: none;
+    user-select: none;
+  }
+  .ui-status-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: min(100%, 640px);
+    min-width: 0;
+  }
+  .ui-status-screen[data-tone="pending"] .ui-status-content {
+    grid-row: 3;
+    align-self: start;
+    padding-top: clamp(20px, 3.4cqw, 32px);
+  }
+  .ui-status-title {
+    max-width: 22ch;
+    color: var(--a00-ink);
+    font-family: var(--a00-font-display);
+    font-size: clamp(36px, 6vw, 64px);
+    font-size: clamp(36px, 6cqw, 64px);
+    font-weight: 600;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+  .ui-status-description {
+    max-width: 44ch;
+    color: var(--a00-muted);
+    font-size: 16px;
+    line-height: 1.6;
+    text-wrap: pretty;
+    overflow-wrap: anywhere;
+  }
+  .ui-status-title + .ui-status-description {
+    margin-top: 20px;
+  }
+  .ui-status-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px 24px;
+    margin-top: 32px;
+  }
+  @media (max-width: 640px) {
+    .ui-status-screen {
+      --st-pad: 20px;
+      padding: 32px 20px;
+    }
+    .ui-status-description {
+      font-size: 15px;
+    }
+    .ui-status-actions {
+      flex-direction: column;
+      align-items: stretch;
+      width: min(100%, 320px);
+    }
+  }
+
+  /* ---------- Navigation: desktop rail from 1024px, bottom bar below it.
+     Rail: packages/00/src/ui/sidebar/sidebar.module.css (menuButton, 16rem, 44px rows, light focus ring).
+     Bar: components/SidebarMobileNav + SidebarDarkTheme (icon over label, safe-area inset), made a full-width bar
+     with square corners (the original pill radius 22px is outside the 00 radius scale). The active row is a soft plate
+     with ink text; the panel is darker than the ground. ---------- */
+  .ui-nav {
+    position: fixed;
+    z-index: 45;
+    inset: auto 0 0 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    color: var(--a00-nav-text);
+    background: var(--a00-nav-surface);
+    border-top: 1px solid var(--a00-nav-border);
+    font: 500 14px/1.4 var(--a00-font-ui);
+  }
+  .ui-nav-brand,
+  .ui-nav-footer {
+    display: none;
+  }
+  .ui-nav-list {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .ui-nav-link {
+    position: relative;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    min-height: 56px;
+    padding: 6px 4px;
+    border-radius: var(--a00-radius-md);
+    color: var(--a00-nav-muted);
+    background: transparent;
+    font: 500 12px/1.2 var(--a00-font-ui);
+    text-align: center;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background-color var(--a00-duration-ui) var(--a00-ease),
+      color var(--a00-duration-ui) var(--a00-ease);
+  }
+  .ui-nav-link > span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ui-nav-link[aria-current="page"] {
+    color: var(--a00-nav-text);
+    background: var(--a00-nav-active);
+    font-weight: 600;
+  }
+  .ui-nav-link:focus-visible,
+  .ui-nav .ui-button:focus-visible {
+    outline: 2px solid var(--a00-nav-focus);
+    outline-offset: -2px;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .ui-nav-link:not([aria-current="page"]):hover {
+      color: var(--a00-nav-text);
+      background: var(--a00-nav-active);
+    }
+  }
+  @media (min-width: 1024px) {
+    .ui-nav {
+      inset: 0 auto 0 0;
+      width: 16rem;
+      gap: 8px;
+      padding: 8px;
+      overflow-y: auto;
+      border-top: 0;
+      border-right: 1px solid var(--a00-nav-border);
+    }
+    .ui-nav-brand {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+      padding: 12px 12px 8px;
+      color: var(--a00-nav-text);
+      font: 600 22px/1.2 var(--a00-font-ui);
+      letter-spacing: -0.02em;
+      text-decoration: none;
+      border-radius: var(--a00-radius-md);
+    }
+    .ui-nav-brand:focus-visible {
+      outline: 2px solid var(--a00-nav-focus);
+      outline-offset: -2px;
+    }
+    .ui-nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-top: 8px;
+    }
+    .ui-nav-link {
+      flex-direction: row;
+      justify-content: flex-start;
+      gap: 12px;
+      min-height: 44px;
+      padding: 10px 12px;
+      font-size: 14px;
+      text-align: start;
+    }
+    .ui-nav-footer {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: auto;
+      padding-top: 8px;
+      border-top: 1px solid var(--a00-nav-border);
+    }
+    .ui-nav-version {
+      padding: 4px 12px 0;
+      color: var(--a00-nav-muted);
+      font: 400 13px/1.5 var(--a00-font-ui);
+      font-variant-numeric: tabular-nums;
+    }
+    .ui-nav-footer .ui-button {
+      justify-content: flex-start;
+      width: 100%;
+      color: var(--a00-nav-muted);
+    }
+    .ui-nav-footer .ui-button:hover {
+      color: var(--a00-nav-text);
+    }
+  }
+
+  /* ---------- Reduced motion: no lifts, no transitions, no loops beyond what the state needs ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    .ui-button,
+    .ui-input,
+    .ui-textarea,
+    .ui-select,
+    .ui-input-group,
+    .ui-checkbox,
+    .ui-switch,
+    .ui-switch::before,
+    .ui-item,
+    .ui-toggle,
+    .ui-nav-link {
+      transition: none;
+    }
+    /* Vendor pseudo-elements stay in separate rules: one unknown selector would drop the whole list. */
+    .ui-slider::-webkit-slider-thumb {
+      transition: none;
+    }
+    .ui-slider::-moz-range-thumb {
+      transition: none;
+    }
+    .ui-toast {
+      animation: none;
+      transition: none;
+    }
+    .ui-dialog[open] {
+      animation: none;
+    }
+    .ui-skeleton::after {
+      animation: none;
+      display: none;
+    }
+    .ui-spinner {
+      animation: none;
+    }
+  }
+  @media (forced-colors: active) {
+    .ui-switch:checked,
+    .ui-checkbox:checked,
+    .ui-toggle[aria-pressed="true"] {
+      background: Highlight;
+      border-color: Highlight;
+      color: HighlightText;
+    }
+    .ui-slider::-webkit-slider-runnable-track {
+      outline: 1px solid ButtonText;
+      outline-offset: -1px;
+    }
+    .ui-slider::-moz-range-track {
+      outline: 1px solid ButtonText;
+      outline-offset: -1px;
+    }
+  }
+}

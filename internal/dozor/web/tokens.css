@@ -1,0 +1,149 @@
+/*
+ * Dozor web UI: tokens.
+ *
+ * Design system "00" (Atmosphere), monorepo-frontend commit e405f620, docs/design/00.md, packages/00.
+ * 00 is light-only (section 3.5); this product adds its own DARK token map, an approved product decision.
+ * Final values and measured contrast ratios are recorded in docs/ui.md. Raw colours live ONLY in this file.
+ * Everything is served from the same origin: the CSP forbids data: fonts and any inline style.
+ *
+ * Layer order for the three stylesheets (tokens.css is linked first and declares it):
+ *   reset (base element rules) < components (ported ui-* blocks) < app (Dozor layout).
+ */
+@layer reset, components, app;
+
+/* ---------- Fonts: local woff2 files with their SIL OFL texts (web/fonts/*-OFL.txt) ---------- */
+/* Geist: variable, Latin + Cyrillic. Source: packages/00/src/fonts/Geist.woff2 */
+@font-face {
+  font-family: "A00 Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/Geist.woff2) format("woff2");
+}
+/* Cormorant Garamond: variable, accent headings only (never below 24px). */
+@font-face {
+  font-family: "A00 Cormorant Garamond";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url(/fonts/CormorantGaramond.woff2) format("woff2");
+}
+/* Metric-matched Georgia stand-ins for Cormorant (packages/00/src/fonts/fonts.css): a late swap barely shifts layout. */
+@font-face {
+  font-family: "A00 Cormorant Garamond Fallback";
+  font-style: normal;
+  font-weight: 300 599;
+  src: local("Georgia"), local("Georgia-Regular");
+  size-adjust: 85.9%;
+  ascent-override: 107.6%;
+  descent-override: 33.4%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "A00 Cormorant Garamond Fallback";
+  font-style: normal;
+  font-weight: 600 700;
+  src: local("Georgia Bold"), local("Georgia-Bold");
+  size-adjust: 74.9%;
+  ascent-override: 123.4%;
+  descent-override: 38.3%;
+  line-gap-override: 0%;
+}
+/* IBM Plex Mono: code, keys, identifiers. Only the Latin subset (RTSP addresses, UUIDs, JSON are ASCII). */
+@font-face {
+  font-family: "A00 IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/IBMPlexMono-400-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "A00 IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/IBMPlexMono-500-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ---------- Dark token map ---------- */
+:root {
+  color-scheme: dark;
+
+  /* roles, 00.md section 3.1 */
+  --a00-ground: #111211;
+  --a00-surface: #181918;
+  --a00-ink: #edede8;
+  --a00-muted: #9c9e98;
+  --a00-accent: #edede8;
+  --a00-on-accent: #181918;
+  --a00-soft: #232523;
+  --a00-border: #2e302d;
+  --a00-control-border: #6e716b;
+
+  /* product signature, section 12: by default the whole interface stays neutral */
+  --a00-signature: var(--a00-accent);
+  --a00-on-signature: var(--a00-on-accent);
+  --a00-signature-soft: var(--a00-marker);
+
+  /* aliases, section 3.2 */
+  --a00-note: var(--a00-muted);
+  --a00-secondary: var(--a00-muted);
+  --a00-rose: var(--a00-soft);
+  --a00-marker: var(--a00-border);
+  --a00-pressed: var(--a00-border);
+  --a00-primary-fill: var(--a00-accent);
+  /* legacy materials (Card raised / glass / accent): neutral dark counterparts, not used by this product */
+  --a00-raised-fill: linear-gradient(145deg, #1d1f1d, #181918);
+  --a00-glass-fill: linear-gradient(155deg, rgb(255 255 255 / 8%), rgb(255 255 255 / 3%));
+  --a00-accent-fill: linear-gradient(145deg, #232523, #1d1f1d);
+
+  /* statuses, section 3.3: text/icon colour and its soft background */
+  --a00-success: #86c29f;
+  --a00-success-soft: #18261e;
+  --a00-warning: #e2b867;
+  --a00-warning-soft: #2b2214;
+  --a00-danger: #f0909f;
+  --a00-danger-soft: #2e181c;
+  --a00-info: #93b8da;
+  --a00-info-soft: #17222d;
+
+  /* fonts, section 5.1 */
+  --a00-font: "A00 Geist", "Geist", system-ui, sans-serif;
+  --a00-font-ui: var(--a00-font);
+  --a00-font-display: "A00 Cormorant Garamond", "Cormorant Garamond", "A00 Cormorant Garamond Fallback", Georgia, serif;
+  --a00-font-code: "A00 IBM Plex Mono", ui-monospace, monospace;
+  --a00-font-mono: var(--a00-font-ui); /* deprecated in 00 */
+
+  /* geometry, layers, motion, section 4 */
+  --a00-tint-rgb: 0, 0, 0;
+  --a00-paper-edge: rgb(255 255 255 / 5%);
+  --a00-shell-max: 1280px; /* product choice: wide working screen (events list + player) */
+  --a00-shadow: none;
+  --a00-radius-xs: 3px;
+  --a00-radius-sm: 8px;
+  --a00-radius-md: 12px;
+  --a00-radius-lg: 18px;
+  --a00-radius-xl: 24px;
+  --a00-radius-card: var(--a00-radius-md);
+  --a00-radius-control: var(--a00-radius-md);
+  --a00-overlay: rgb(0 0 0 / 62%);
+  --a00-overlay-shadow: 0 24px 64px rgb(0 0 0 / 55%), inset 0 1px 0 rgb(255 255 255 / 6%);
+  --a00-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --a00-ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --a00-duration-ui: 320ms;
+
+  /* navigation panel (desktop rail and bottom bar): darker than the ground, light focus ring; 00.md section 10.4 */
+  --a00-nav-surface: #0b0c0b;
+  --a00-nav-border: #232523;
+  --a00-nav-text: var(--a00-ink);
+  --a00-nav-muted: var(--a00-muted);
+  --a00-nav-active: var(--a00-soft);
+  --a00-nav-focus: var(--a00-accent);
+}
+
+/* The overlay of a native <dialog> is painted on ::backdrop; make sure it sees the token even where ::backdrop does not inherit. */
+::backdrop {
+  --a00-overlay: rgb(0 0 0 / 62%);
+}
