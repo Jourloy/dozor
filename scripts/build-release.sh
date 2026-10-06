@@ -33,6 +33,8 @@ printf '%s\n' 'FFmpeg 8.0.1 source: https://ffmpeg.org/releases/ffmpeg-8.0.1.tar
 go version -m "$package_dir/bin/dozor" > "$package_dir/LICENSES/go-modules.txt"
 cp "$(go env GOROOT)/LICENSE" "$package_dir/LICENSES/Go.txt"
 python3 scripts/collect-licenses.py "$package_dir/LICENSES"
+cp internal/dozor/web/vendor/hls-LICENSE.txt "$package_dir/LICENSES/hls.js.txt"
+cp internal/dozor/web/vendor/Apache-2.0.txt "$package_dir/LICENSES/hls.js-Apache-2.0.txt"
 tar -czf "dist/dozor_${release_version}_linux_arm64.tar.gz" -C "$package_dir" VERSION bin LICENSES
 cp "$build_root/ffmpeg.tar.xz" dist/ffmpeg-8.0.1.tar.xz
 echo "Created dist/dozor_${release_version}_linux_arm64.tar.gz"

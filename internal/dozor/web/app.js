@@ -1,6 +1,6 @@
 'use strict';
 /*
- * Dozor web UI. A classic script (no modules, no build step, no dependencies): `node --check` must pass.
+ * Dozor web UI. Classic scripts, no build step; HLS playback is isolated in live.js.
  * The server sends a strict CSP: no inline handlers or styles. Every dynamic style goes through the CSSOM
  * (el.style.setProperty), every text through textContent.
  *
@@ -139,8 +139,8 @@
   let polling = false;
   let screen = 'pending';
   let currentTab = null;
-  const TABS = ['overview', 'events', 'cameras', 'settings'];
-  const TITLES = {overview: t('Под присмотром'), events: 'Архив событий', cameras: 'Камеры', settings: 'Настройки'};
+  const TABS = ['overview', 'live', 'events', 'cameras', 'settings'];
+  const TITLES = {overview: t('Под присмотром'), live: 'Онлайн-просмотр', events: 'Архив событий', cameras: 'Камеры', settings: 'Настройки'};
   const screens = {pending: $('#pending'), fatal: $('#fatal'), login: $('#login'), shell: $('#shell')};
 
   // ------------------------------------------------------------------ errors (00.md 10.8: no raw technical text, no status codes)
@@ -428,6 +428,7 @@
 
   // ------------------------------------------------------------------ screens
   function setScreen(name) {
+    if (name !== 'shell') livePlayer.stop();
     screen = name;
     for (const key of Object.keys(screens)) screens[key].hidden = key !== name;
     if (name === 'pending' || name === 'fatal') document.title = 'Dozor';
@@ -460,6 +461,7 @@
     lastOk = 0;
     failures = 0;
     currentTab = null;
+    selectedLiveCamera = '';
     resetEvents();
     resetPlayer();
     $('#discovery-card').hidden = true;
@@ -518,7 +520,7 @@
     )
   );
 
-  // ------------------------------------------------------------------ router (hash: #overview, #events, #cameras, #settings)
+  // ------------------------------------------------------------------ router (hash: #overview, #live, #events, #cameras, #settings)
   function route() {
     let tab = location.hash.slice(1);
     if (!TABS.includes(tab)) {
@@ -541,6 +543,8 @@
     $('#s3-alert-action').hidden = tab === 'settings';
     if (!changed) return;
     if (tab !== 'events') video.pause();
+    if (tab !== 'live') livePlayer.stop();
+    else renderLive();
     window.scrollTo(0, 0);
     if (tab === 'events') run(() => loadEvents())();
   }
@@ -691,7 +695,7 @@
         const rows = el('ul', {class: 'ui-item-list', dataset: {divided: ''}});
         for (const c of s.cameras) {
           rows.append(
-            el('li', null, el('div', {class: 'ui-item status-row'}, el('div', {class: 'ui-item-content'}, el('p', {class: 'ui-item-title', text: c.name}), el('p', {class: 'ui-item-description status-time', text: streamText(c)})), cameraBadge(c)))
+            el('li', null, el('div', {class: 'ui-item status-row'}, el('div', {class: 'ui-item-content'}, el('p', {class: 'ui-item-title', text: c.name}), el('p', {class: 'ui-item-description status-time', text: streamText(c)})), el('div', {class: 'ui-item-actions'}, cameraBadge(c), c.enabled ? liveButton(c) : null)))
           );
         }
         list.append(rows);
@@ -712,7 +716,79 @@
       }
     });
     renderUpdateStatus(s.update_status);
+    renderLive();
   }
+
+  // ------------------------------------------------------------------ live view
+  let selectedLiveCamera = '';
+  const liveVideo = $('#live-video');
+  const LIVE_STATES = {
+    connecting: ['Подключаемся…', 'secondary'],
+    playing: ['В эфире', 'success'],
+    paused: ['Пауза', 'secondary'],
+    retrying: ['Переподключение', 'warning'],
+    error: ['Недоступно', 'warning'],
+  };
+  function liveState(state, message) {
+    const [label, variant] = LIVE_STATES[state];
+    setBadge($('#live-badge'), label, variant);
+    setText($('#live-message'), t(message));
+    $('#live-frame').hidden = state === 'error' || state === 'retrying';
+    $('#live-edge').disabled = state !== 'playing' && state !== 'paused';
+  }
+  const livePlayer = new window.DozorLivePlayer(liveVideo, liveState, () => showLogin({notice: MSG.sessionExpired}));
+  function liveButton(camera) {
+    return el('button', {
+      type: 'button', class: 'ui-button', dataset: {variant: 'outline', size: 'sm'},
+      'aria-label': 'Смотреть онлайн: ' + camera.name,
+      on: {click: () => {
+        selectedLiveCamera = camera.id;
+        if (currentTab === 'live') renderLive();
+        else location.hash = 'live';
+      }},
+    }, icon('live', {size: 16, slot: 'inline-start'}), 'Онлайн');
+  }
+  function renderLive(force = false) {
+    if (!settings) return;
+    const cameras = settings.cameras.filter(c => c.enabled);
+    if (!cameras.some(c => c.id === selectedLiveCamera)) selectedLiveCamera = cameras.length ? cameras[0].id : '';
+    const select = $('#live-camera');
+    renderIfChanged(select, cameras.map(c => [c.id, c.name]), () => {
+      select.replaceChildren();
+      for (const camera of cameras) select.add(new Option(camera.name, camera.id));
+    });
+    select.value = selectedLiveCamera;
+    const missing = !cameras.length || !snapshot || !snapshot.disk_ready;
+    $('#live-empty').hidden = !missing;
+    $('#live-content').hidden = missing;
+    if (missing) {
+      livePlayer.stop();
+      const hasCameras = cameras.length > 0;
+      $('#live-empty').replaceChildren(emptyState({
+        title: hasCameras ? 'Видеослужба недоступна' : 'Нет включённых камер',
+        description: hasCameras ? 'Подключите диск и дождитесь запуска камер. Онлайн-просмотр использует работающую видеослужбу.' : 'Добавьте камеру или включите существующую в разделе «Камеры».',
+        sticker: 'dual-camera', bordered: true,
+        action: el('a', {class: 'ui-button', href: hasCameras ? '#settings' : '#cameras', text: hasCameras ? 'Перейти к настройкам' : 'Перейти к камерам'}),
+      }));
+      return;
+    }
+    const camera = cameras.find(c => c.id === selectedLiveCamera);
+    setText($('#live-title'), camera.name);
+    liveVideo.setAttribute('aria-label', 'Прямая трансляция: ' + camera.name);
+    if (screen !== 'shell' || currentTab !== 'live' || document.hidden) return;
+    const url = '/api/v1/cameras/' + encodeURIComponent(camera.id) + '/live/index.m3u8';
+    if (force || livePlayer.url !== url) livePlayer.start(url);
+  }
+  $('#live-camera').addEventListener('change', event => {
+    selectedLiveCamera = event.target.value;
+    renderLive();
+  });
+  $('#live-retry').addEventListener('click', () => renderLive(true));
+  $('#live-edge').addEventListener('click', () => livePlayer.goLive());
+  window.addEventListener('pagehide', () => livePlayer.stop());
+  window.addEventListener('pageshow', () => {
+    if (screen === 'shell') renderLive();
+  });
 
   // ------------------------------------------------------------------ cameras
   function cameraCard(camera) {
@@ -744,7 +820,7 @@
       {class: 'ui-card camera-card', 'aria-labelledby': title},
       el('div', {class: 'ui-card-header'}, el('h3', {class: 'ui-card-title', id: title, text: camera.name}), el('span', {class: 'ui-card-action'}, camera.enabled ? badge('Включена', 'success') : badge('Отключена', 'secondary'))),
       el('div', {class: 'ui-card-content'}, el('p', {class: 'camera-url', text: camera.url}), el('p', {class: 'camera-meta', text: t('Источник движения: ' + (MOTION_LABELS[camera.motion] || camera.motion))})),
-      el('div', {class: 'ui-card-footer'}, edit, del)
+      el('div', {class: 'ui-card-footer'}, camera.enabled ? liveButton(camera) : null, edit, del)
     );
   }
   function renderCameras() {
@@ -1440,7 +1516,11 @@
   }
   window.setInterval(poll, 10000);
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) poll();
+    if (document.hidden) livePlayer.stop();
+    else {
+      if (screen === 'shell') renderLive();
+      poll();
+    }
   });
 
   boot();

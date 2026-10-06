@@ -111,7 +111,10 @@ func MediaConfig(c Config, b Binaries, socket string) ([]byte, error) {
 		}
 		paths[cam.ID] = map[string]any{"source": CameraURL(cam, false), "rtspTransport": "tcp", "record": true}
 	}
-	v := map[string]any{"logLevel": "error", "rtspAddress": "127.0.0.1:8554", "rtspTransports": []string{"tcp"}, "moq": false, "rtmp": false, "hls": false, "webrtc": false, "srt": false, "api": false, "playback": false, "paths": paths,
+	v := map[string]any{"logLevel": "error", "rtspAddress": "127.0.0.1:8554", "rtspTransports": []string{"tcp"}, "moq": false, "rtmp": false, "webrtc": false, "srt": false, "api": false, "playback": false, "paths": paths,
+		// Remux on demand in RAM. fMP4 also works in native Safari over local HTTP.
+		"hls": true, "hlsAddress": liveAddress, "hlsAllowOrigins": []string{}, "hlsAlwaysRemux": false,
+		"hlsVariant": "fmp4", "hlsSegmentCount": 7, "hlsSegmentDuration": "1s", "hlsSegmentMaxSize": "16M", "hlsDirectory": "", "hlsMuxerCloseAfter": "15s",
 		"authInternalUsers": []any{map[string]any{"user": "any", "ips": []string{"127.0.0.1", "::1"}, "permissions": []any{map[string]any{"action": "read"}}}},
 		"pathDefaults":      map[string]any{"recordPath": filepath.Join(c.Archive, "buffer", "%path", "%Y-%m-%d_%H-%M-%S.%f"), "recordFormat": "fmp4", "recordPartDuration": "1s", "recordMaxPartSize": "8M", "recordSegmentDuration": "5s", "recordDeleteAfter": "0s", "runOnRecordSegmentComplete": shellQuote(b.Self) + " hook --socket " + shellQuote(socket)}}
 	return json.MarshalIndent(v, "", "  ") // JSON is a YAML subset; avoids interpolating credentials into syntax.

@@ -153,6 +153,7 @@ func (a *App) Handler() http.Handler {
 		jsonOut(w, 200, p)
 	}))
 	m.HandleFunc("PUT /api/v1/cameras/{id}", a.protected(a.saveCamera))
+	m.HandleFunc("GET /api/v1/cameras/{id}/live/{file}", a.protected(a.liveHandler(liveTransport)))
 	m.HandleFunc("DELETE /api/v1/cameras/{id}", a.protected(func(w http.ResponseWriter, r *http.Request) {
 		c := a.Config.Get()
 		cams := []Camera{}
@@ -283,7 +284,7 @@ func (a *App) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
 		}

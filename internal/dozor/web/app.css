@@ -244,6 +244,11 @@
   .status-row.ui-item {
     padding-inline: 0;
     padding-block: 12px;
+    flex-wrap: wrap;
+  }
+  .status-row .ui-item-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
   }
   .status-row .ui-item-description {
     font-size: 13px;
@@ -281,6 +286,25 @@
   }
 
   /* ---------- Events ---------- */
+  /* Keep the current picture readable on wide screens and all five nav labels on small phones. */
+  .live-frame {
+    max-height: 70dvh;
+  }
+  .camera-card .ui-card-footer {
+    flex-wrap: wrap;
+  }
+  @media (max-width: 374px) {
+    .ui-nav {
+      padding-inline: 2px;
+    }
+    .ui-nav-list {
+      gap: 0;
+    }
+    .ui-nav-link {
+      padding-inline: 1px;
+      font-size: 11px;
+    }
+  }
   .filter-bar {
     display: flex;
     flex-wrap: wrap;
