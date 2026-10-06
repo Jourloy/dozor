@@ -158,8 +158,8 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) erro
 	}
 	cfg := c.Get()
 	status := func(msg string) { _ = AtomicWrite("/var/lib/dozor/update-status.json", []byte(msg), 0644) }
-	if !cfg.AutoUpdate || cfg.ReleaseURL == "" {
-		status("Автообновление выключено или не указан адрес release.json")
+	if !cfg.AutoUpdate {
+		status("Автообновление выключено")
 		return nil
 	}
 	b, e := os.ReadFile("/etc/dozor/update.pub")
@@ -169,45 +169,113 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) erro
 	}
 	key, e := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
 	if e != nil || len(key) != ed25519.PublicKeySize {
+		status("Не установлен ключ проверки обновлений")
 		return errors.New("invalid update public key")
 	}
 	u.PublicKey = key
-	s, e := u.Fetch(ctx, cfg.ReleaseURL)
+	client := UnixClient("/run/dozor/control.sock")
+	u.Stop = func() error { return exec.Command("systemctl", "stop", "dozor.service").Run() }
+	u.Start = func() error { return exec.Command("systemctl", "start", "dozor.service").Run() }
+	u.Healthy = func(ctx context.Context, version string) bool {
+		for ctx.Err() == nil {
+			health, e := readProcessHealth(ctx, client)
+			if e == nil && health.Ready && health.Version == version {
+				return true
+			}
+			if !pause(ctx, time.Second) {
+				break
+			}
+		}
+		return false
+	}
+	return u.updateRunning(ctx, cfg.ReleaseURL, client, status)
+}
+
+type processHealth struct {
+	Version string `json:"version"`
+	Ready   bool   `json:"ready"`
+}
+
+func readProcessHealth(ctx context.Context, client *http.Client) (processHealth, error) {
+	var health processHealth
+	req, e := http.NewRequestWithContext(ctx, "GET", "http://unix/health", nil)
 	if e != nil {
-		status(e.Error())
+		return health, e
+	}
+	res, e := client.Do(req)
+	if e != nil {
+		return health, errors.New("Dozor недоступна; обновление отложено")
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return health, errors.New("не удалось определить версию работающей Dozor")
+	}
+	if e = json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&health); e != nil || (!versionPattern.MatchString(health.Version) && health.Version != "dev") {
+		return health, errors.New("не удалось определить версию работающей Dozor")
+	}
+	return health, nil
+}
+
+func preflightRelease(ctx context.Context, staged, version string) error {
+	for _, check := range []struct{ name, arg string }{{"dozor", "version"}, {"mediamtx", "--version"}, {"ffmpeg", "-version"}, {"ffprobe", "-version"}} {
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cmd := exec.CommandContext(probeCtx, filepath.Join(staged, "bin", check.name), check.arg)
+		out, err := cmd.Output()
+		cancel()
+		if err != nil {
+			return errors.New("Новый пакет несовместим с устройством")
+		}
+		if check.name == "dozor" && strings.TrimSpace(string(out)) != version {
+			return errors.New("версия бинарника не совпадает с версией подписанного пакета")
+		}
+	}
+	return nil
+}
+
+func (u *Updater) updateRunning(ctx context.Context, address string, client *http.Client, status func(string)) (err error) {
+	defer func() {
+		if err != nil {
+			status(err.Error())
+		}
+	}()
+	current, e := readProcessHealth(ctx, client)
+	if e != nil {
 		return e
 	}
-	current, _ := os.ReadFile("/opt/dozor/current/VERSION")
-	if !Newer(s.Release.Version, strings.TrimSpace(string(current))) {
+	s, e := u.Fetch(ctx, address)
+	if e != nil {
+		return e
+	}
+	if !Newer(s.Release.Version, current.Version) {
 		status("Установлена актуальная версия")
 		return nil
 	}
 	// Download and verify before reserving an idle maintenance window.
 	staged, e := u.Stage(ctx, s)
 	if e != nil {
-		status(e.Error())
 		return e
 	}
-	for _, check := range []struct{ name, arg string }{{"dozor", "version"}, {"mediamtx", "--version"}, {"ffmpeg", "-version"}, {"ffprobe", "-version"}} {
-		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		cmd := exec.CommandContext(probeCtx, filepath.Join(staged, "bin", check.name), check.arg)
-		err := cmd.Run()
-		cancel()
-		if err != nil {
-			status("Новый пакет несовместим с устройством")
-			return errors.New("release binary preflight failed")
-		}
+	if e = preflightRelease(ctx, staged, s.Release.Version); e != nil {
+		return e
 	}
-	previous, e := filepath.EvalSymlinks("/opt/dozor/current")
+	// Recheck after the download in case the running application changed meanwhile.
+	current, e = readProcessHealth(ctx, client)
+	if e != nil {
+		return e
+	}
+	if !Newer(s.Release.Version, current.Version) {
+		status("Установлена актуальная версия")
+		return nil
+	}
+	previous, e := filepath.EvalSymlinks(filepath.Join(u.Root, "current"))
 	if e != nil {
 		return e
 	}
 	// Persist recovery before reserving the paused window. The failure unit
 	// restarts the recorder only when this journal exists.
-	if e = WriteJSON("/opt/dozor/pending-update.json", UpdateJournal{previous, staged}); e != nil {
+	if e = WriteJSON(filepath.Join(u.Root, "pending-update.json"), UpdateJournal{previous, staged}); e != nil {
 		return e
 	}
-	client := UnixClient("/run/dozor/control.sock")
 	req, _ := http.NewRequestWithContext(ctx, "POST", "http://unix/prepare-update", nil)
 	res, e := client.Do(req)
 	if e != nil {
@@ -219,31 +287,7 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) erro
 		status("Обновление загружено; ожидаем завершения событий")
 		return u.clearJournal()
 	}
-	u.Stop = func() error { return exec.Command("systemctl", "stop", "dozor.service").Run() }
-	u.Start = func() error { return exec.Command("systemctl", "start", "dozor.service").Run() }
-	u.Healthy = func(ctx context.Context, version string) bool {
-		for ctx.Err() == nil {
-			req, _ := http.NewRequestWithContext(ctx, "GET", "http://unix/health", nil)
-			res, e := client.Do(req)
-			if e == nil {
-				var v struct {
-					Version string
-					Ready   bool
-				}
-				e = json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&v)
-				res.Body.Close()
-				if e == nil && v.Ready && v.Version == version {
-					return true
-				}
-			}
-			if !pause(ctx, time.Second) {
-				break
-			}
-		}
-		return false
-	}
 	if e = u.Apply(ctx, s); e != nil {
-		status(e.Error())
 		return e
 	}
 	status(fmt.Sprintf("Установлена %s · %s", s.Release.Version, time.Now().UTC().Format(time.RFC3339)))

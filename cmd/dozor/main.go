@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	project "dozor"
 	"dozor/internal/dozor"
 	"encoding/base64"
 	"encoding/json"
@@ -24,7 +25,7 @@ import (
 	"time"
 )
 
-var version = "dev"
+var version = project.Version()
 
 func main() {
 	if e := run(); e != nil {
@@ -185,11 +186,14 @@ func signRelease() error {
 	f := flag.NewFlagSet("sign", flag.ContinueOnError)
 	key := f.String("key", "", "private key file")
 	bundle := f.String("bundle", "", "bundle tar.gz")
-	v := f.String("version", "", "version")
+	v := f.String("version", version, "release version (defaults to project VERSION)")
 	address := f.String("url", "", "HTTPS bundle URL")
 	out := f.String("out", "release.json", "signed metadata")
 	if e := f.Parse(os.Args[2:]); e != nil {
 		return e
+	}
+	if *v != version {
+		return fmt.Errorf("release version must match project VERSION (%s)", version)
 	}
 	b, e := os.ReadFile(*key)
 	if e != nil {

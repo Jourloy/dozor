@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+task_root=$(cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$task_root"
+release_version=$(bash scripts/version.sh "$@")
 if [[ $(uname -s) != Linux || $(uname -m) != aarch64 ]]; then
   echo 'Build natively on Linux ARM64; CI uses Debian bookworm for glibc compatibility.' >&2; exit 1
 fi
-release_version=${1:?Usage: scripts/build-release.sh v1.0.0}
-if [[ ! $release_version =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then exit 1; fi
-task_root=$(cd -- "$(dirname -- "$0")/.." && pwd)
-cd "$task_root"
 build_root=$(mktemp -d)
 trap 'rm -rf "$build_root"' EXIT
 package_dir="$build_root/package"
@@ -27,8 +26,9 @@ tar -xJf "$build_root/ffmpeg.tar.xz" -C "$build_root"
   install -m 0755 ffmpeg ffprobe "$package_dir/bin/"
   cp COPYING.LGPLv2.1 "$package_dir/LICENSES/FFmpeg-LGPL-2.1.txt"
 )
-CGO_ENABLED=1 go build -trimpath -ldflags="-s -w -X main.version=$release_version" -o "$package_dir/bin/dozor" ./cmd/dozor
-printf '%s\n' "$release_version" > "$package_dir/VERSION"
+CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o "$package_dir/bin/dozor" ./cmd/dozor
+test "$("$package_dir/bin/dozor" version)" = "$release_version"
+cp VERSION "$package_dir/VERSION"
 printf '%s\n' 'FFmpeg 8.0.1 source: https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz' 'Build flags: --disable-doc --disable-debug --disable-ffplay --disable-autodetect' > "$package_dir/LICENSES/SOURCES.txt"
 go version -m "$package_dir/bin/dozor" > "$package_dir/LICENSES/go-modules.txt"
 cp "$(go env GOROOT)/LICENSE" "$package_dir/LICENSES/Go.txt"

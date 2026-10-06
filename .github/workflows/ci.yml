@@ -13,10 +13,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: go test -race ./...
       - run: go vet ./...
-      - run: test -z "$(gofmt -l cmd internal)"
+      - run: test -z "$(gofmt -l version*.go cmd internal)"
       - run: node --check internal/dozor/web/app.js
       - run: node --check internal/dozor/web/live.js
       - run: node --check internal/dozor/web/vendor/a00-menu.js
       - run: node --test internal/dozor/live_player_test.cjs
-      - run: bash -n scripts/install.sh scripts/build-release.sh
+      - run: bash -n scripts/install.sh scripts/build-release.sh scripts/version.sh
+      - run: bash scripts/version.sh
       - run: python3 -m py_compile scripts/collect-licenses.py scripts/soak.py

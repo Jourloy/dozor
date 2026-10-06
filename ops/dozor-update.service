@@ -5,6 +5,6 @@ OnFailure=dozor-rollback.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/libexec/dozor-system system update
+ExecStart=/opt/dozor/current/bin/dozor system update
 TimeoutStartSec=25min
 UMask=0077

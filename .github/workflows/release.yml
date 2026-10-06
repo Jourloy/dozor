@@ -11,6 +11,8 @@ jobs:
     steps:
       - run: apt-get update && apt-get install -y ca-certificates curl git build-essential pkg-config xz-utils python3
       - uses: actions/checkout@v4
+      - name: Verify release tag matches project version
+        run: bash scripts/version.sh "$GITHUB_REF_NAME"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -24,9 +26,10 @@ jobs:
           umask 077
           printf '%s' "$SIGNING_KEY" > /tmp/dozor-signing.key
           trap 'rm -f /tmp/dozor-signing.key' EXIT
-          go run ./cmd/dozor sign --key /tmp/dozor-signing.key --bundle "dist/dozor_${GITHUB_REF_NAME}_linux_arm64.tar.gz" --version "$GITHUB_REF_NAME" --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/dozor_${GITHUB_REF_NAME}_linux_arm64.tar.gz" --out dist/release.json
+          go run ./cmd/dozor sign --key /tmp/dozor-signing.key --bundle "dist/dozor_${GITHUB_REF_NAME}_linux_arm64.tar.gz" --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/dozor_${GITHUB_REF_NAME}_linux_arm64.tar.gz" --out dist/release.json
       - uses: softprops/action-gh-release@v2
         with:
+          make_latest: legacy
           files: |
             dist/dozor_*_linux_arm64.tar.gz
             dist/release.json

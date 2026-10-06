@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -113,7 +114,7 @@ func WriteJSON(path string, v any) error {
 	return AtomicWrite(path, append(b, '\n'), 0600)
 }
 func LoadConfig(path string) (*ConfigFile, error) {
-	c := Config{Listen: "127.0.0.1:8080", Archive: "/srv/dozor", Timezone: "Europe/Moscow", Cameras: []Camera{}, S3: S3Config{Region: "us-east-1", Prefix: "dozor", BytesPerSecond: 2 * 1024 * 1024}, AutoUpdate: true}
+	c := Config{Listen: "127.0.0.1:8080", Archive: "/srv/dozor", Timezone: "Europe/Moscow", Cameras: []Camera{}, S3: S3Config{Region: "us-east-1", Prefix: "dozor", BytesPerSecond: 2 * 1024 * 1024}, AutoUpdate: true, ReleaseURL: DefaultReleaseURL}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		err = WriteJSON(path, c)
@@ -122,6 +123,9 @@ func LoadConfig(path string) (*ConfigFile, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(c.ReleaseURL) == "" {
+		c.ReleaseURL = DefaultReleaseURL
 	}
 	if err = ValidateConfig(c); err != nil {
 		return nil, err
@@ -137,6 +141,9 @@ func (f *ConfigFile) Get() Config {
 	return c
 }
 func (f *ConfigFile) Save(c Config) error {
+	if strings.TrimSpace(c.ReleaseURL) == "" {
+		c.ReleaseURL = DefaultReleaseURL
+	}
 	if e := ValidateConfig(c); e != nil {
 		return e
 	}

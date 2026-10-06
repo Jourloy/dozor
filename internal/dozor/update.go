@@ -17,10 +17,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
+
+const DefaultReleaseURL = "https://github.com/Jourloy/dozor/releases/latest/download/release.json"
 
 type Release struct {
 	Version  string `json:"version"`
@@ -58,10 +59,11 @@ func Newer(a, b string) bool {
 	av := strings.Split(strings.TrimPrefix(a, "v"), ".")
 	bv := strings.Split(strings.TrimPrefix(b, "v"), ".")
 	for i := range av {
-		x, _ := strconv.ParseUint(av[i], 10, 64)
-		y, _ := strconv.ParseUint(bv[i], 10, 64)
-		if x != y {
-			return x > y
+		if len(av[i]) != len(bv[i]) {
+			return len(av[i]) > len(bv[i])
+		}
+		if av[i] != bv[i] {
+			return av[i] > bv[i]
 		}
 	}
 	return false
@@ -99,9 +101,25 @@ func (u *Updater) client() *http.Client {
 }
 func (u *Updater) Fetch(ctx context.Context, address string) (SignedRelease, error) {
 	var s SignedRelease
+	if strings.TrimSpace(address) == "" {
+		address = DefaultReleaseURL
+	}
 	v, e := url.Parse(address)
-	if e != nil || v.Scheme != "https" || v.User != nil {
+	if e != nil || v.Scheme != "https" || v.Host == "" || v.User != nil {
 		return s, errors.New("обновления требуют HTTPS")
+	}
+	// Resolve latest once, then fetch the signed manifest from that exact tag.
+	// Otherwise a release published between requests could change the candidate.
+	var tag string
+	parts := strings.Split(strings.Trim(v.Path, "/"), "/")
+	if v.Host == "github.com" && len(parts) == 6 && parts[2] == "releases" && parts[3] == "latest" && parts[4] == "download" && parts[5] == "release.json" {
+		tag, e = u.latestGitHubTag(ctx, parts[0], parts[1])
+		if e != nil {
+			return s, e
+		}
+		v.Path = "/" + parts[0] + "/" + parts[1] + "/releases/download/" + tag + "/release.json"
+		v.RawPath, v.RawQuery, v.Fragment = "", "", ""
+		address = v.String()
 	}
 	req, e := http.NewRequestWithContext(ctx, "GET", address, nil)
 	if e != nil {
@@ -120,8 +138,45 @@ func (u *Updater) Fetch(ctx context.Context, address string) (SignedRelease, err
 	if e = d.Decode(&s); e != nil {
 		return s, e
 	}
-	return s, VerifyRelease(s, u.PublicKey)
+	if e = VerifyRelease(s, u.PublicKey); e != nil {
+		return s, e
+	}
+	if tag != "" && s.Release.Version != tag {
+		return s, errors.New("версия подписанного пакета не совпадает с тегом релиза")
+	}
+	return s, nil
 }
+
+func (u *Updater) latestGitHubTag(ctx context.Context, owner, repo string) (string, error) {
+	address := "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/releases/latest"
+	req, e := http.NewRequestWithContext(ctx, "GET", address, nil)
+	if e != nil {
+		return "", e
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2026-03-10")
+	res, e := u.client().Do(req)
+	if e != nil {
+		return "", errors.New("источник обновлений недоступен")
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("источник обновлений вернул ошибку GitHub (%d)", res.StatusCode)
+	}
+	var release struct {
+		Tag        string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+	}
+	if e = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&release); e != nil {
+		return "", errors.New("источник обновлений вернул некорректный релиз")
+	}
+	if release.Draft || release.Prerelease || !versionPattern.MatchString(release.Tag) {
+		return "", errors.New("источник обновлений не содержит стабильного тега версии")
+	}
+	return release.Tag, nil
+}
+
 func (u *Updater) Stage(ctx context.Context, s SignedRelease) (string, error) {
 	if e := VerifyRelease(s, u.PublicKey); e != nil {
 		return "", e

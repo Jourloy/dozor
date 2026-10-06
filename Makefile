@@ -1,6 +1,7 @@
 .PHONY: build test check integration menu
 
 build:
+	@bash scripts/version.sh >/dev/null
 	@mkdir -p bin
 	CGO_ENABLED=1 go build -trimpath -o bin/dozor ./cmd/dozor
 
@@ -11,11 +12,12 @@ test:
 
 check:
 	go vet ./...
-	test -z "$$(gofmt -l cmd internal)"
+	test -z "$$(gofmt -l version*.go cmd internal)"
 	node --check internal/dozor/web/app.js
 	node --check internal/dozor/web/live.js
 	node --check internal/dozor/web/vendor/a00-menu.js
-	bash -n scripts/install.sh scripts/build-release.sh
+	bash -n scripts/install.sh scripts/build-release.sh scripts/version.sh
+	bash scripts/version.sh
 	PYTHONPYCACHEPREFIX="$(CURDIR)/.cache/pycache" python3 -m py_compile scripts/collect-licenses.py scripts/soak.py
 
 integration: build
