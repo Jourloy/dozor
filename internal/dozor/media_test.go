@@ -121,7 +121,10 @@ func TestRTSPPipeline(t *testing.T) {
 	must(t, source.Start())
 	defer func() { source.Process.Kill(); source.Wait() }()
 	pause(ctx, time.Second)
-	publisher := exec.CommandContext(ctx, ff, "-nostdin", "-v", "error", "-re", "-f", "lavfi", "-i", "color=c=gray:s=320x180:r=5:d=72", "-re", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=5:d=4", "-re", "-f", "lavfi", "-i", "color=c=gray:s=320x180:r=5:d=60", "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]", "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-g", "5", "-f", "rtsp", "-rtsp_transport", "tcp", cam.URL)
+	// Keep every phase on one input clock: separate -re inputs can catch up
+	// in a burst when concat switches to them, ending the RTSP stream early.
+	video := "testsrc2=s=320x180:r=5:d=136,drawbox=x=0:y=0:w=iw:h=ih:color=gray:t=fill:enable='lt(t,72)+gte(t,76)'"
+	publisher := exec.CommandContext(ctx, ff, "-nostdin", "-v", "error", "-re", "-f", "lavfi", "-i", video, "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-g", "5", "-f", "rtsp", "-rtsp_transport", "tcp", cam.URL)
 	var publisherLog limitedBuffer
 	publisherLog.limit = 1 << 20
 	publisher.Stderr = &publisherLog
