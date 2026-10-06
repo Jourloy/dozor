@@ -86,6 +86,7 @@
 }
 .dozor-menu .sidebar-dock[data-expanded="false"] .dozor-menu__logout {
   justify-content: center;
+  gap: 0;
   padding-inline: 0;
 }
 .dozor-menu .sidebar-dock[data-expanded="false"] .dozor-menu__logout-label {
