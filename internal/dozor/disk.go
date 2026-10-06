@@ -52,7 +52,9 @@ type archiveMountInfo struct {
 }
 
 func archiveMount(root string) (archiveMountInfo, error) {
-	b, e := exec.Command("findmnt", "--json", "--mountpoint", root, "--output", "TARGET,UUID,FSTYPE,OPTIONS").Output()
+	// systemd's mount namespace can retain covered bind mounts after hotplug.
+	// Inspect only the visible filesystem, not the layers underneath it.
+	b, e := exec.Command("findmnt", "--json", "--uniq", "--mountpoint", root, "--output", "TARGET,UUID,FSTYPE,OPTIONS").Output()
 	if e != nil {
 		return archiveMountInfo{}, errors.New("диск отключён")
 	}

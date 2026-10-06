@@ -74,3 +74,20 @@ func TestExFATArchiveIO(t *testing.T) {
 		t.Fatalf("upload queue did not survive reopening: jobs=%d", jobs)
 	}
 }
+
+// The original disk must not be accepted when another mount covers its path.
+// Run in an isolated mount namespace with tmpfs over an exFAT test image.
+func TestArchiveGuardRejectsCoveredDisk(t *testing.T) {
+	root, uuid := os.Getenv("DOZOR_COVERED_ARCHIVE_ROOT"), os.Getenv("DOZOR_COVERED_ARCHIVE_UUID")
+	if root == "" || uuid == "" {
+		t.Skip("set DOZOR_COVERED_ARCHIVE_ROOT and DOZOR_COVERED_ARCHIVE_UUID for a covered test disk")
+	}
+	mount, err := archiveMount(root)
+	must(t, err)
+	if mount.FSType != "tmpfs" {
+		t.Fatalf("test requires tmpfs covering the disk, found %+v", mount)
+	}
+	if err := (Guard{Root: root, UUID: uuid}).Check(); err == nil {
+		t.Fatal("covered disk accepted as the visible archive")
+	}
+}
