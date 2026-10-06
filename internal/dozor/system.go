@@ -141,7 +141,7 @@ func MountDisk(uuid string) error {
 	}
 	return os.Chmod("/srv/dozor", 0700)
 }
-func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) error {
+func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) (err error) {
 	if os.Geteuid() != 0 || runtime.GOOS != "linux" {
 		return errors.New("updates require root on Linux")
 	}
@@ -152,31 +152,44 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) erro
 	if recoverOnly {
 		return u.Recover()
 	}
+	message := "Проверяем наличие обновлений"
+	status := func(msg string) {
+		message = msg
+		_ = writeUpdateStatus("/var/lib/dozor", message, true)
+	}
+	defer func() {
+		if err != nil {
+			message = err.Error()
+		}
+		_ = writeUpdateStatus("/var/lib/dozor", message, false)
+	}()
 	if e := u.Recover(); e != nil {
 		return e
+	}
+	client := UnixClient("/run/dozor/control.sock")
+	u.Immediate, err = readUpdateRequest(ctx, client)
+	if err != nil {
+		return err
 	}
 	c, e := LoadConfig(configPath)
 	if e != nil {
 		return e
 	}
 	cfg := c.Get()
-	status := func(msg string) { _ = AtomicWrite("/var/lib/dozor/update-status.json", []byte(msg), 0644) }
-	if !cfg.AutoUpdate {
+	if !cfg.AutoUpdate && !u.Immediate {
 		status("Автообновление выключено")
 		return nil
 	}
+	status("Проверяем наличие обновлений")
 	b, e := os.ReadFile("/etc/dozor/update.pub")
 	if e != nil {
-		status("Не установлен ключ проверки обновлений")
-		return e
+		return errors.New("Не установлен ключ проверки обновлений")
 	}
 	key, e := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
 	if e != nil || len(key) != ed25519.PublicKeySize {
-		status("Не установлен ключ проверки обновлений")
-		return errors.New("invalid update public key")
+		return errors.New("Не установлен ключ проверки обновлений")
 	}
 	u.PublicKey = key
-	client := UnixClient("/run/dozor/control.sock")
 	u.Stop = func() error { return exec.Command("systemctl", "stop", "dozor.service").Run() }
 	u.Start = func() error { return exec.Command("systemctl", "start", "dozor.service").Run() }
 	u.Healthy = func(ctx context.Context, version string) bool {
@@ -257,6 +270,7 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 		return nil
 	}
 	// Download and verify before reserving an idle maintenance window.
+	status("Скачиваем и проверяем обновление")
 	staged, e := u.Stage(ctx, s)
 	if e != nil {
 		return e
@@ -282,7 +296,11 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 	if e = WriteJSON(filepath.Join(u.Root, "pending-update.json"), UpdateJournal{Previous: previous, Candidate: staged}); e != nil {
 		return e
 	}
-	req, _ := http.NewRequestWithContext(ctx, "POST", "http://unix/prepare-update", nil)
+	prepareURL := "http://unix/prepare-update"
+	if u.Immediate {
+		prepareURL += "?immediate=true"
+	}
+	req, _ := http.NewRequestWithContext(ctx, "POST", prepareURL, nil)
 	res, e := client.Do(req)
 	if e != nil {
 		return errors.New("Dozor недоступна; обновление отложено")
@@ -293,6 +311,7 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 		status("Обновление загружено; ожидаем завершения событий")
 		return u.clearJournal()
 	}
+	status("Устанавливаем обновление; Dozor перезапускается")
 	if e = u.Apply(ctx, s); e != nil {
 		return e
 	}

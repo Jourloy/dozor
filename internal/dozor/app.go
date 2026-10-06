@@ -36,6 +36,7 @@ type App struct {
 	sessions                  map[string]Session
 	attempts                  map[string]loginAttempt
 	setupToken                string
+	updateMu                  sync.Mutex
 }
 
 func NewApp(c *ConfigFile, b Binaries, dev bool, state, socket, version string) (*App, error) {
@@ -294,12 +295,13 @@ func (a *App) internalHandler() http.Handler {
 	m.HandleFunc("POST /prepare-update", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.RLock()
 		defer a.mu.RUnlock()
-		if a.runtime != nil && !a.runtime.Engine.PrepareUpdate() {
+		if a.runtime != nil && !a.runtime.Engine.PrepareUpdate(r.URL.Query().Get("immediate") == "true") {
 			apiError(w, 409, "активное событие")
 			return
 		}
 		w.WriteHeader(204)
 	})
+	m.HandleFunc("POST /update-request", a.consumeUpdateRequest)
 	m.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.RLock()
 		defer a.mu.RUnlock()
@@ -345,9 +347,9 @@ func (a *App) Status() map[string]any {
 		}
 		m["cameras"] = cams
 	}
-	if b, e := os.ReadFile(filepath.Join(a.StateDir, "update-status.json")); e == nil {
-		m["update_status"] = string(b)
-	}
+	update := readUpdateStatus(a.StateDir)
+	m["update_status"] = update.Message
+	m["update_running"] = update.Running
 	return m
 }
 func (a *App) CheckReady() error {

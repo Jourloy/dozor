@@ -216,7 +216,7 @@ func TestFetchCustomReleaseManifest(t *testing.T) {
 func TestUpdateComparesRunningVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name, running, disk, afterDownload string
-		busy, apply                        bool
+		busy, apply, immediate             bool
 	}{
 		{name: "new release", running: "v1.0.0", disk: "v9.0.0", apply: true},
 		{name: "same release", running: "v1.1.0", disk: "v0.1.0"},
@@ -224,9 +224,11 @@ func TestUpdateComparesRunningVersion(t *testing.T) {
 		{name: "legacy version without prefix", running: "1.1.0", disk: "v0.1.0"},
 		{name: "updated during download", running: "v1.0.0", disk: "v0.1.0", afterDownload: "v1.2.0"},
 		{name: "active recording", running: "v1.0.0", disk: "v0.1.0", busy: true},
+		{name: "manual update during recording", running: "v1.0.0", disk: "v0.1.0", busy: true, immediate: true, apply: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			u, s := releaseFixture(t, "")
+			u.Immediate = tc.immediate
 			must(t, os.WriteFile(filepath.Join(u.Root, "current", "VERSION"), []byte(tc.disk), 0644))
 			manifest, e := json.Marshal(s)
 			must(t, e)
@@ -253,7 +255,11 @@ func TestUpdateComparesRunningVersion(t *testing.T) {
 					return updateResponse(r, 200, `{"version":"`+version+`","ready":true}`), nil
 				case "/prepare-update":
 					prepares++
-					if tc.busy {
+					immediate := r.URL.Query().Get("immediate") == "true"
+					if immediate != tc.immediate {
+						t.Fatalf("unexpected immediate update: %s", r.URL)
+					}
+					if tc.busy && !immediate {
 						return updateResponse(r, 409, ""), nil
 					}
 					return updateResponse(r, 204, ""), nil
@@ -276,7 +282,7 @@ func TestUpdateComparesRunningVersion(t *testing.T) {
 			} else if filepath.Base(target) != "v1.0.0" || starts != 0 || stops != 0 {
 				t.Fatalf("unexpected update: %s starts=%d stops=%d", target, starts, stops)
 			}
-			if tc.busy && (prepares != 1 || !strings.HasPrefix(status, "Обновление загружено")) {
+			if tc.busy && !tc.immediate && (prepares != 1 || !strings.HasPrefix(status, "Обновление загружено")) {
 				t.Fatalf("active recording did not defer update: %q", status)
 			}
 			if _, e := os.Stat(filepath.Join(u.Root, "pending-update.json")); !errors.Is(e, os.ErrNotExist) {

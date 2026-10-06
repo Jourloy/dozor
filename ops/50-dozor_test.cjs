@@ -4,7 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 
-test('disk policy allows only Dozor to start an ext4 or exFAT selection unit', () => {
+test('policy allows only Dozor to start disk selection and the signed updater', () => {
   let rule;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '50-dozor.rules'), 'utf8'), {
     polkit: {addRule: callback => { rule = callback; }, Result: {YES: 'yes'}},
@@ -19,6 +19,14 @@ test('disk policy allows only Dozor to start an ext4 or exFAT selection unit', (
     assert.equal(authorize(unit, 'dozor', 'start', 'org.freedesktop.systemd1.manage-unit-files'), undefined);
   }
   for (const unit of ['ssh.service', 'dozor-disk-prepare@12345678.service', 'dozor-disk-prepare@../12AB-34CD.service', 'dozor-disk-prepare@12AB-34CD.service\n', 'dozor-disk-prepare@12AB-34CD.service.extra']) {
+    assert.equal(authorize(unit), undefined, unit);
+  }
+  assert.equal(authorize('dozor-update.service'), 'yes');
+  assert.equal(authorize('dozor-update.service', 'nobody'), undefined);
+  for (const verb of ['stop', 'restart', 'reload']) {
+    assert.equal(authorize('dozor-update.service', 'dozor', verb), undefined);
+  }
+  for (const unit of ['dozor-update.timer', 'dozor-update.service\n', 'dozor-update.service.extra', 'dozor-rollback.service']) {
     assert.equal(authorize(unit), undefined, unit);
   }
 });

@@ -134,6 +134,8 @@
   let csrf = '';
   let settings = null;
   let snapshot = null; // last confirmed GET /status
+  let updateGeneration = 0;
+  let reloadAfterUpdate = false;
   let lastOk = 0;
   let failures = 0;
   let polling = false;
@@ -214,7 +216,9 @@
     }
     const serverText = data && typeof data.error === 'string' ? data.error : '';
     if (response.status === 401 && path !== '/login') {
-      showLogin({notice: MSG.sessionExpired});
+      const updating = snapshot && snapshot.update_running;
+      reloadAfterUpdate = reloadAfterUpdate || Boolean(updating);
+      showLogin({notice: updating ? t('Dozor перезапущен. Войдите снова, чтобы проверить результат обновления.') : MSG.sessionExpired});
       throw new ApiError(MSG.sessionExpired, 401, true);
     }
     if (response.status === 403 && path !== '/login' && /csrf/i.test(serverText)) {
@@ -515,6 +519,11 @@
         const auth = await api('/login', 'POST', {password: password.value, token: field(loginForm, 'token').value});
         csrf = auth.csrf;
         loginForm.reset();
+        if (reloadAfterUpdate) {
+          // Load the new release's frontend as well as its backend after restart.
+          location.reload();
+          return;
+        }
         try {
           await enter();
         } catch (error) {
@@ -759,7 +768,7 @@
         notices.append(el('div', {class: 'notice'}, el('time', {text: time(n.at), datetime: new Date(n.at).toISOString()}), el('span', {text: message})));
       }
     });
-    renderUpdateStatus(s.update_status);
+    renderUpdateStatus(s.update_status, s.update_running);
     renderLive();
   }
 
@@ -1535,7 +1544,33 @@
     )
   );
 
-  /** Human-readable state of the automatic update from the text the updater writes (update-status.json). */
+  let updateRequestPending = false;
+  $('#check-update').addEventListener('click', async () => {
+    if (updateRequestPending || (snapshot && snapshot.update_running)) return;
+    const button = $('#check-update');
+    const hadFocus = document.activeElement === button;
+    updateRequestPending = true;
+    setBusy(button, true);
+    $('#settings-error').hidden = true;
+    try {
+      if (field(settingsForm, 'release_url').value.trim() !== (settings.release_url || '').trim()) {
+        throw new UserError(t('Сначала сохраните изменённый адрес обновлений.'));
+      }
+      const result = await api('/updates/check', 'POST', undefined, {fallback: t('Не удалось запустить обновление. Проверьте системную службу и права доступа.')});
+      updateGeneration++;
+      snapshot = {...snapshot, ...result};
+      renderUpdateStatus(snapshot.update_status, snapshot.update_running);
+      announce('Проверка обновлений запущена.');
+    } catch (error) {
+      if (!(error && error.handled)) showSettingsError(error);
+    } finally {
+      updateRequestPending = false;
+      renderUpdateStatus(snapshot && snapshot.update_status, snapshot && snapshot.update_running);
+      if (hadFocus && !button.disabled && document.activeElement === document.body) button.focus({preventScroll: true});
+    }
+  });
+
+  /** Human-readable state of the update from the message the updater writes. */
   function describeUpdate(raw) {
     const text = String(raw || '').trim();
     if (!text) return null;
@@ -1546,6 +1581,11 @@
       return {tone: 'success', text: t('Установлена версия ' + installed[1].replace(/^v/, '') + when)};
     }
     const known = [
+      [/^Проверяем наличие обновлений$/, 'info', 'Проверяем наличие обновлений…'],
+      [/^Скачиваем и проверяем обновление$/, 'info', 'Новая версия найдена. Скачиваем пакет и проверяем подпись…'],
+      [/^Устанавливаем обновление/, 'info', 'Устанавливаем обновление. Dozor перезапустится; затем потребуется войти снова.'],
+      [/^Проверка обновлений прервана/, 'warning', 'Проверка обновлений прервана. Повторите попытку.'],
+      [/^Не удалось запустить обновление/, 'warning', 'Не удалось запустить обновление. Проверьте системную службу и права доступа.'],
       [/^Установлена актуальная версия$/, 'success', 'Установлена актуальная версия.'],
       [/^Автообновление выключено/, 'neutral', 'Автообновление выключено.'],
       [/^Не установлен ключ проверки/, 'warning', 'Не установлен ключ проверки подписи. Его устанавливает администратор на устройстве.'],
@@ -1566,7 +1606,8 @@
     return {tone: 'neutral', text: t('Не удалось определить результат последней проверки обновлений. Проверка повторится позже.')};
   }
   const UPDATE_TONES = {success: ['success', 'circle-check'], warning: ['warning', 'alert'], info: ['info', 'info'], neutral: ['default', 'info']};
-  function renderUpdateStatus(raw) {
+  function renderUpdateStatus(raw, running = false) {
+    setBusy($('#check-update'), updateRequestPending || Boolean(running));
     const box = $('#update-status');
     const state = describeUpdate(raw);
     if (!state) {
@@ -1643,7 +1684,11 @@
 
   // ------------------------------------------------------------------ polling and start
   async function refreshStatus() {
-    snapshot = await api('/status');
+    const generation = updateGeneration;
+    const status = await api('/status');
+    // A poll started before the manual request must not replace its new progress.
+    if (generation !== updateGeneration) return;
+    snapshot = status;
     lastOk = Date.now();
     failures = 0;
     renderStatus();

@@ -178,9 +178,14 @@ func (e *Engine) States() map[string]MotionState {
 	}
 	return v
 }
-func (e *Engine) PrepareUpdate() bool {
+func (e *Engine) PrepareUpdate(immediate bool) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if immediate {
+		// Shutdown finishes the current streams; startup reconciles pending events.
+		e.paused = true
+		return true
+	}
 	if len(e.active) > 0 {
 		return false
 	}

@@ -416,6 +416,12 @@
               <input class="ui-input" id="set-release-url" name="release_url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://github.com/Jourloy/dozor/releases/latest/download/release.json" aria-describedby="set-release-hint">
               <p class="ui-hint" id="set-release-hint">По&nbsp;умолчанию проверяются релизы Jourloy/dozor. Ключ проверки подписи устанавливается администратором на&nbsp;устройстве.</p>
             </div>
+            <div class="ui-field">
+              <div class="form-actions">
+                <button type="button" class="ui-button" data-variant="outline" id="check-update" aria-describedby="check-update-hint"><svg class="ui-icon" data-icon="inline-start" aria-hidden="true"><use href="#i-refresh"/></svg>Проверить и обновить сейчас</button>
+              </div>
+              <p class="ui-hint" id="check-update-hint">Если есть новая версия, установим её сразу. Работает и&nbsp;при выключенном автообновлении. На&nbsp;время установки запись будет приостановлена.</p>
+            </div>
             <div class="ui-alert" id="update-status" role="status" hidden>
               <svg class="ui-icon" aria-hidden="true"><use href="#i-info"/></svg>
               <p class="ui-alert-description" id="update-status-text"></p>

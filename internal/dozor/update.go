@@ -47,6 +47,7 @@ type Updater struct {
 	Start     func() error
 	Healthy   func(context.Context, string) bool
 	System    *SystemIntegration
+	Immediate bool
 }
 
 var versionPattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)

@@ -226,7 +226,7 @@ func TestAvailabilityWatchdogAndDelayedTail(t *testing.T) {
 	if r.streams[cam.ID].State != "offline" {
 		t.Fatal("late tail made offline camera online")
 	}
-	if !r.Engine.PrepareUpdate() {
+	if !r.Engine.PrepareUpdate(false) {
 		t.Fatal("offline detector blocked update")
 	}
 }
