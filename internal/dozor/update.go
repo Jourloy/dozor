@@ -35,8 +35,9 @@ type SignedRelease struct {
 	Signature string  `json:"signature"`
 }
 type UpdateJournal struct {
-	Previous  string `json:"previous"`
-	Candidate string `json:"candidate"`
+	Previous     string `json:"previous"`
+	Candidate    string `json:"candidate"`
+	SystemBackup string `json:"system_backup,omitempty"`
 }
 type Updater struct {
 	Root      string
@@ -45,6 +46,7 @@ type Updater struct {
 	Stop      func() error
 	Start     func() error
 	Healthy   func(context.Context, string) bool
+	System    *SystemIntegration
 }
 
 var versionPattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -388,7 +390,15 @@ func (u *Updater) Recover() error {
 	if e = u.switchTo(j.Previous); e != nil {
 		return e
 	}
-	return u.clearJournal()
+	if j.SystemBackup != "" {
+		if u.System == nil {
+			return errors.New("system recovery is not configured")
+		}
+		if e = u.System.restore(u.Root, j.SystemBackup); e != nil {
+			return e
+		}
+	}
+	return u.finishUpdate(j)
 }
 func (u *Updater) Apply(ctx context.Context, s SignedRelease) error {
 	dest, e := u.Stage(ctx, s)
@@ -399,8 +409,21 @@ func (u *Updater) Apply(ctx context.Context, s SignedRelease) error {
 	if e != nil {
 		return e
 	}
-	// Persist rollback intent before stopping the working version or switching links.
-	if e = WriteJSON(filepath.Join(u.Root, "pending-update.json"), UpdateJournal{previous, dest}); e != nil {
+	j := UpdateJournal{Previous: previous, Candidate: dest}
+	var integration systemManifest
+	if u.System != nil {
+		if integration, e = releaseSystemIntegration(ctx, dest, s.Release.Version); e != nil {
+			return e
+		}
+		if e = u.System.ensureRecovery(); e != nil {
+			return e
+		}
+		if j.SystemBackup, e = u.System.snapshot(u.Root); e != nil {
+			return e
+		}
+	}
+	// Persist both rollback snapshots before stopping or changing the installation.
+	if e = WriteJSON(filepath.Join(u.Root, "pending-update.json"), j); e != nil {
 		return e
 	}
 	rollback := func(cause error) error {
@@ -423,6 +446,11 @@ func (u *Updater) Apply(ctx context.Context, s SignedRelease) error {
 	if e = u.switchTo(dest); e != nil {
 		return rollback(e)
 	}
+	if u.System != nil {
+		if e = u.System.install(dest, integration); e != nil {
+			return rollback(e)
+		}
+	}
 	if u.Start != nil {
 		if e = u.Start(); e != nil {
 			return rollback(e)
@@ -433,5 +461,5 @@ func (u *Updater) Apply(ctx context.Context, s SignedRelease) error {
 	if u.Healthy != nil && !u.Healthy(health, s.Release.Version) {
 		return rollback(errors.New("обновление не прошло проверку; предыдущая версия восстановлена"))
 	}
-	return u.clearJournal()
+	return u.finishUpdate(j)
 }

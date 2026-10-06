@@ -33,6 +33,7 @@ chown -R root:root "/opt/dozor/releases/$release_version"
 chmod 0755 "/opt/dozor/releases/$release_version" "/opt/dozor/releases/$release_version/bin"
 ln -s "releases/$release_version" /opt/dozor/current
 install -o root -g root -m 0755 "$bundle_dir/bin/dozor" /usr/local/libexec/dozor-system
+install -o root -g root -m 0755 "$bundle_dir/bin/dozor" /usr/local/libexec/dozor-recover
 for unit in dozor.service dozor-update.service dozor-update.timer dozor-recover.service dozor-rollback.service dozor-disk-prepare@.service; do
   install -m 0644 "$repo_dir/ops/$unit" "/etc/systemd/system/$unit"
 done

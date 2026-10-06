@@ -22,12 +22,17 @@ import (
 	"testing"
 )
 
-func releaseFixture(t *testing.T, malicious string) (*Updater, SignedRelease) {
+func releaseFixture(t *testing.T, malicious string, overrides ...map[string]string) (*Updater, SignedRelease) {
 	t.Helper()
 	var b bytes.Buffer
 	gz := gzip.NewWriter(&b)
 	tw := tar.NewWriter(gz)
-	files := map[string]string{"VERSION": "v1.1.0\n", "bin/dozor": "#!/bin/sh\necho v1.1.0\n", "bin/mediamtx": "#!/bin/sh\nexit 0\n", "bin/ffmpeg": "#!/bin/sh\nexit 0\n", "bin/ffprobe": "#!/bin/sh\nexit 0\n"}
+	files := map[string]string{"VERSION": "v1.1.0\n", "bin/dozor": systemFixtureBinary("v1.1.0", "candidate policy"), "bin/mediamtx": "#!/bin/sh\nexit 0\n", "bin/ffmpeg": "#!/bin/sh\nexit 0\n", "bin/ffprobe": "#!/bin/sh\nexit 0\n"}
+	for _, override := range overrides {
+		for path, data := range override {
+			files[path] = data
+		}
+	}
 	if malicious != "" {
 		files[malicious] = "bad"
 	}
@@ -101,7 +106,7 @@ func TestUpdateCommitAndBootRecovery(t *testing.T) {
 		t.Fatal(target)
 	}
 	previous := filepath.Join(u.Root, "releases", "v1.0.0")
-	must(t, WriteJSON(filepath.Join(u.Root, "pending-update.json"), UpdateJournal{previous, target}))
+	must(t, WriteJSON(filepath.Join(u.Root, "pending-update.json"), UpdateJournal{Previous: previous, Candidate: target}))
 	must(t, u.Recover())
 	target, e = filepath.EvalSymlinks(filepath.Join(u.Root, "current"))
 	must(t, e)

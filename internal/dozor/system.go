@@ -145,7 +145,10 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) erro
 	if os.Geteuid() != 0 || runtime.GOOS != "linux" {
 		return errors.New("updates require root on Linux")
 	}
-	u := &Updater{Root: "/opt/dozor"}
+	u := &Updater{Root: "/opt/dozor", System: &SystemIntegration{
+		Root: "/", RecoveryBinary: "/opt/dozor/current/bin/dozor",
+		Reload: func() error { return exec.Command("systemctl", "daemon-reload").Run() },
+	}}
 	if recoverOnly {
 		return u.Recover()
 	}
@@ -242,6 +245,9 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 	if e != nil {
 		return e
 	}
+	if e = u.reconcileSystem(ctx, current.Version); e != nil {
+		return e
+	}
 	s, e := u.Fetch(ctx, address)
 	if e != nil {
 		return e
@@ -273,7 +279,7 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 	}
 	// Persist recovery before reserving the paused window. The failure unit
 	// restarts the recorder only when this journal exists.
-	if e = WriteJSON(filepath.Join(u.Root, "pending-update.json"), UpdateJournal{previous, staged}); e != nil {
+	if e = WriteJSON(filepath.Join(u.Root, "pending-update.json"), UpdateJournal{Previous: previous, Candidate: staged}); e != nil {
 		return e
 	}
 	req, _ := http.NewRequestWithContext(ctx, "POST", "http://unix/prepare-update", nil)

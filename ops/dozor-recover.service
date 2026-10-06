@@ -4,5 +4,5 @@ Before=dozor.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/libexec/dozor-system system recover
+ExecStart=/usr/local/libexec/dozor-recover system recover
 RemainAfterExit=yes

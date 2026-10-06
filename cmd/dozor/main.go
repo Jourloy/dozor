@@ -150,9 +150,11 @@ func hook() error {
 }
 func system() error {
 	if len(os.Args) < 3 {
-		return errors.New("system select-disk UUID | update | recover")
+		return errors.New("system select-disk UUID | update | recover | integration")
 	}
 	switch os.Args[2] {
+	case "integration":
+		return dozor.PrintSystemIntegration(os.Stdout, version)
 	case "select-disk":
 		if len(os.Args) != 4 {
 			return errors.New("UUID required")
