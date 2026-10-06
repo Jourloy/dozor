@@ -7,4 +7,5 @@ OnFailure=dozor-rollback.service
 Type=oneshot
 ExecStart=/opt/dozor/current/bin/dozor system update
 TimeoutStartSec=25min
-UMask=0077
+# Older installed updaters also need to create releases readable by dozor.
+UMask=0022

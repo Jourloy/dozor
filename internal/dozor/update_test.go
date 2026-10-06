@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -305,6 +306,32 @@ func TestPreflightRejectsWrongBinaryVersion(t *testing.T) {
 	must(t, e)
 	if e = preflightRelease(context.Background(), staged, "v1.2.0"); e == nil || !strings.Contains(e.Error(), "версия бинарника") {
 		t.Fatalf("mislabeled binary accepted: %v", e)
+	}
+}
+
+func TestUpdateReleasePermissionsWithPrivateUmask(t *testing.T) {
+	u, s := releaseFixture(t, "LICENSES/test.txt")
+	previous := syscall.Umask(0077)
+	defer syscall.Umask(previous)
+	staged, e := u.Stage(context.Background(), s)
+	must(t, e)
+	for path, want := range map[string]os.FileMode{
+		filepath.Dir(staged):                       0755,
+		staged:                                     0755,
+		filepath.Join(staged, "bin"):               0755,
+		filepath.Join(staged, "bin/dozor"):         0555,
+		filepath.Join(staged, "bin/mediamtx"):      0555,
+		filepath.Join(staged, "bin/ffmpeg"):        0555,
+		filepath.Join(staged, "bin/ffprobe"):       0555,
+		filepath.Join(staged, "VERSION"):           0444,
+		filepath.Join(staged, "LICENSES"):          0755,
+		filepath.Join(staged, "LICENSES/test.txt"): 0444,
+	} {
+		info, err := os.Stat(path)
+		must(t, err)
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s permissions = %04o, want %04o", path, got, want)
+		}
 	}
 }
 

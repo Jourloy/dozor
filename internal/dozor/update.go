@@ -186,6 +186,9 @@ func (u *Updater) Stage(ctx context.Context, s SignedRelease) (string, error) {
 	if e := os.MkdirAll(releases, 0755); e != nil {
 		return "", e
 	}
+	if e := os.Chmod(releases, 0755); e != nil {
+		return "", e
+	}
 	dest := filepath.Join(releases, r.Version)
 	if b, e := os.ReadFile(filepath.Join(dest, ".bundle-sha256")); e == nil {
 		if string(b) == r.SHA256 {
@@ -276,6 +279,11 @@ func (u *Updater) Stage(ctx context.Context, s SignedRelease) (string, error) {
 		}
 		_, e = io.CopyN(f, tr, hdr.Size)
 		if e == nil {
+			// The root updater may run with umask 0077, but the service runs
+			// as dozor and must be able to read and execute the release.
+			e = f.Chmod(mode)
+		}
+		if e == nil {
 			e = f.Sync()
 		}
 		ce := f.Close()
@@ -298,12 +306,12 @@ func (u *Updater) Stage(ctx context.Context, s SignedRelease) (string, error) {
 	if e = AtomicWrite(filepath.Join(stage, ".bundle-sha256"), []byte(r.SHA256), 0444); e != nil {
 		return "", e
 	}
-	if e = os.Chmod(stage, 0755); e != nil {
-		return "", e
-	}
 	var dirs []string
 	if e = filepath.WalkDir(stage, func(path string, entry os.DirEntry, err error) error {
 		if err == nil && entry.IsDir() {
+			if err = os.Chmod(path, 0755); err != nil {
+				return err
+			}
 			dirs = append(dirs, path)
 		}
 		return err
