@@ -41,10 +41,18 @@ func Probe(ctx context.Context, bin, input string, rtsp bool) (ProbeResult, erro
 	var out limitedBuffer
 	out.limit = 2 << 20
 	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
+	var stderr diagnosticBuffer
+	cmd.Stderr = &stderr
+	if rtsp {
+		// Camera URLs may contain credentials; only local file diagnostics are public.
+		cmd.Stderr = io.Discard
+	}
 	var p ProbeResult
 	if err := cmd.Run(); err != nil {
-		return p, errors.New("не удалось получить видео: проверьте адрес, пароль и RTSP")
+		if rtsp {
+			return p, errors.New("не удалось получить видео: проверьте адрес, пароль и RTSP")
+		}
+		return p, mediaCommandError(ctx, "ffprobe", err, &stderr)
 	}
 	var v struct {
 		Streams []struct {
@@ -88,6 +96,37 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	b.data = append(b.data, p...)
 	return n, nil
 }
+
+const diagnosticLimit = 2048
+
+// Drain all stderr even after the retained prefix is full. Returning a write
+// error would close the pipe and could turn a successful media command into a failure.
+type diagnosticBuffer struct {
+	data      []byte
+	truncated bool
+}
+
+func (b *diagnosticBuffer) Write(p []byte) (int, error) {
+	n := min(len(p), diagnosticLimit-len(b.data))
+	b.data = append(b.data, p[:n]...)
+	b.truncated = b.truncated || n < len(p)
+	return len(p), nil
+}
+
+func mediaCommandError(ctx context.Context, tool string, err error, stderr *diagnosticBuffer) error {
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	detail := strings.Join(strings.Fields(strings.ToValidUTF8(string(stderr.data), "�")), " ")
+	if stderr.truncated {
+		detail += " …"
+	}
+	if detail == "" {
+		return fmt.Errorf("%s: %w", tool, err)
+	}
+	return fmt.Errorf("%s: %w: %s", tool, err, detail)
+}
+
 func HashFile(path string) (sha, md string, size int64, err error) {
 	f, e := os.Open(path)
 	if e != nil {
@@ -287,9 +326,10 @@ func Assemble(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segmen
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, b.FFmpeg, "-nostdin", "-v", "error", "-f", "concat", "-safe", "1", "-i", list.Name(), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", "-y", partial)
-	cmd.Stderr = io.Discard
+	var stderr diagnosticBuffer
+	cmd.Stderr = &stderr
 	if e = cmd.Run(); e != nil {
-		return p, errVideoAssembly
+		return p, fmt.Errorf("%w: %w", errVideoAssembly, mediaCommandError(ctx, "ffmpeg", e, &stderr))
 	}
 	if _, e = Probe(ctx, b.FFprobe, partial, false); e != nil {
 		return p, fmt.Errorf("%w: %w", errVideoAssembly, e)

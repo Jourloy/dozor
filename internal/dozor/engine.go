@@ -3,6 +3,7 @@ package dozor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -29,12 +30,18 @@ type Engine struct {
 	active       map[string]string
 	online       map[string]bool
 	disconnected map[string]int64
+	retries      map[string]assemblyRetry
 	paused       bool
 	assemble     func(context.Context, *Store, Binaries, Event, []Segment) (Part, error)
 }
 
+type assemblyRetry struct {
+	next  time.Time
+	delay time.Duration
+}
+
 func NewEngine(s *Store, b Binaries) *Engine {
-	return &Engine{Store: s, Bins: b, states: map[string]MotionState{}, active: map[string]string{}, online: map[string]bool{}, disconnected: map[string]int64{}, assemble: Assemble}
+	return &Engine{Store: s, Bins: b, states: map[string]MotionState{}, active: map[string]string{}, online: map[string]bool{}, disconnected: map[string]int64{}, retries: map[string]assemblyRetry{}, assemble: Assemble}
 }
 
 func (e *Engine) SetOnline(camera string, online bool) {
@@ -201,6 +208,7 @@ func (e *Engine) PrepareUpdate(immediate bool) bool {
 	return true
 }
 func (e *Engine) Tick(ctx context.Context, now time.Time) error {
+	started := time.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.Store.mutate.Lock()
@@ -217,7 +225,7 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) error {
 					var err error
 					ev, err = e.Store.Event(id)
 					if err != nil {
-						return err
+						return eventError(Event{ID: id, CameraID: cam}, "чтение события", err)
 					}
 					// Waiting for the recorder to close its last segment must not
 					// extend the ten-second motion merging window.
@@ -236,22 +244,25 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) error {
 				}
 				ev.End = now.Add(10 * time.Second).UnixMilli()
 				if err := e.Store.SaveEvent(ev); err != nil {
-					return err
+					return eventError(ev, "сохранение события", err)
 				}
 			}
 		}
 	}
 	events, err := e.Store.PendingEvents()
 	if err != nil {
-		return err
+		return fmt.Errorf("чтение незавершённых событий: %w", err)
 	}
 	var assemblyError error
 eventsLoop:
 	for _, ev := range events {
+		if now.Before(e.retries[ev.ID].next) {
+			continue
+		}
 		expired := now.UnixMilli() > ev.End+12000 || ev.Status == "closing"
 		segs, err := e.Store.Segments(ev.CameraID, ev.Cursor, ev.End)
 		if err != nil {
-			return err
+			return eventError(ev, "чтение фрагментов", err)
 		}
 		for len(segs) > 0 {
 			selected := []Segment{}
@@ -278,21 +289,28 @@ eventsLoop:
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
+					err = eventError(ev, fmt.Sprintf("сборка из %s — %s (%d фрагм.)", selected[0].Path, selected[len(selected)-1].Path, len(selected)), err)
 					if !errors.Is(err, errVideoAssembly) {
 						return err
 					}
 					if guardErr := e.Store.Guard.Check(); guardErr != nil {
-						return guardErr
+						return eventError(ev, "проверка диска", guardErr)
 					}
 					// Keep this event's cursor and buffer for retry, but let
 					// later events (including this camera's) make progress.
-					assemblyError = errors.Join(assemblyError, err)
+					retry := e.retries[ev.ID]
+					retry.delay = min(max(5*time.Second, retry.delay*2), time.Minute)
+					// Include time spent assembling so slow failures also get a pause.
+					retry.next = now.Add(time.Since(started) + retry.delay)
+					e.retries[ev.ID] = retry
+					assemblyError = errors.Join(assemblyError, fmt.Errorf("%w; повтор через %d с", err, int(retry.delay/time.Second)))
 					continue eventsLoop
 				}
 				ev.Cursor = p.End
 				if err = e.Store.SaveEvent(ev); err != nil {
-					return err
+					return eventError(ev, "сохранение события", err)
 				}
+				delete(e.retries, ev.ID)
 				segs = segs[len(selected):]
 				// Closed streams must drain their entire tail on this tick.
 				if expired {
@@ -307,21 +325,26 @@ eventsLoop:
 			}
 			ev.Status = "closed"
 			if err = e.markLastPart(ev); err != nil {
-				return err
+				return eventError(ev, "отметка последней части", err)
 			}
 			if err = e.Store.SaveEvent(ev); err != nil {
-				return err
+				return eventError(ev, "завершение события", err)
 			}
 			if err = e.Store.Enqueue("event", ev.ID); err != nil {
-				return err
+				return eventError(ev, "добавление события в очередь выгрузки", err)
 			}
+			delete(e.retries, ev.ID)
 			if e.active[ev.CameraID] == ev.ID {
 				delete(e.active, ev.CameraID)
 			}
 		}
 	}
 	if err := e.Store.PruneBuffer(now); err != nil {
-		return err
+		return fmt.Errorf("очистка буфера: %w", err)
 	}
 	return assemblyError
+}
+
+func eventError(ev Event, operation string, err error) error {
+	return fmt.Errorf("камера %s, событие %s, %s: %w", ev.CameraID, ev.ID, operation, err)
 }

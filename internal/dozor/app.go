@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -22,7 +23,24 @@ type Runtime struct {
 	mediaSince    atomic.Int64
 	streams       map[string]AvailabilityInterval
 	streamSignals chan StreamSignal
+	archiveError  string
+	archiveNotice time.Time
 }
+
+func (r *Runtime) reportArchiveError(prefix string, err error, now time.Time) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	message := prefix + ": " + err.Error()
+	if message == r.archiveError && now.Sub(r.archiveNotice) < time.Minute {
+		return
+	}
+	r.archiveError, r.archiveNotice = message, now
+	r.Store.Notice(message)
+	// Keep diagnostics available in journald even when the catalog cannot be written.
+	log.Print(message)
+}
+
 type App struct {
 	Config                    *ConfigFile
 	Bins                      Binaries
@@ -89,7 +107,7 @@ func (a *App) start(ctx context.Context) error {
 			cancel()
 			return e
 		}
-		s.Notice("Не удалось восстановить часть записей; повтор будет выполнен автоматически")
+		r.reportArchiveError("Не удалось восстановить часть записей", e, time.Now())
 	}
 	if e = r.initStreams(c.Cameras, time.Now()); e != nil {
 		s.Close()
@@ -154,7 +172,7 @@ func (a *App) stop() {
 	finishCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := r.finishDisabledStreams(finishCtx, a.Config.Get().Cameras, time.Now()); err != nil {
-		r.Store.Notice("Не удалось завершить запись выключенной камеры; повтор при восстановлении")
+		r.reportArchiveError("Не удалось завершить запись выключенной камеры; повтор при восстановлении", err, time.Now())
 	}
 	_ = r.Store.Close()
 }
@@ -221,7 +239,7 @@ func (a *App) Run(ctx context.Context) error {
 				r.Store.Notice("Не удалось обновить доступность камер")
 			}
 			if e := r.Engine.Tick(ctx, time.Now()); e != nil {
-				r.Store.Notice("Ошибка обработки архива; повтор будет выполнен")
+				r.reportArchiveError("Ошибка обработки архива; повтор будет выполнен", e, time.Now())
 			}
 			iteration++
 			if iteration%15 == 0 {

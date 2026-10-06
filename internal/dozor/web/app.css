@@ -283,6 +283,10 @@
   .notice:last-child {
     border-bottom: 0;
   }
+  .notice > span {
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+  }
   .notice > time {
     color: var(--a00-muted);
     font-variant-numeric: tabular-nums;

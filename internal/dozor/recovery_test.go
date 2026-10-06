@@ -45,9 +45,13 @@ func TestVideoRecoveryFailureDoesNotBlockOtherEvents(t *testing.T) {
 	sameCamera, _ := pendingRecording(t, s, failed.CameraID, now.Add(-time.Minute))
 	otherCamera, _ := pendingRecording(t, s, ID(), now.Add(-30*time.Second))
 	recovered := false
+	failedAttempts := 0
 	engine.assemble = func(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segment) (Part, error) {
-		if ev.ID == failed.ID && !recovered {
-			return Assemble(ctx, s, b, ev, segs)
+		if ev.ID == failed.ID {
+			failedAttempts++
+			if !recovered {
+				return Assemble(ctx, s, b, ev, segs)
+			}
 		}
 		return fixturePart(t, s, ev, segs[0].Start, segs[len(segs)-1].End), nil
 	}
@@ -71,12 +75,24 @@ func TestVideoRecoveryFailureDoesNotBlockOtherEvents(t *testing.T) {
 	_, err = os.Stat(filepath.Join(s.Root, seg.Path))
 	must(t, err)
 	recovered = true
+	later, _ := pendingRecording(t, s, failed.CameraID, now.Add(time.Second))
 	must(t, engine.Tick(context.Background(), now.Add(time.Second)))
+	actual, err = s.Event(later.ID)
+	must(t, err)
+	if failedAttempts != 1 || actual.Status != "closed" {
+		t.Fatal("backoff must skip only the failed event", failedAttempts, actual)
+	}
+	actual, err = s.Event(failed.ID)
+	must(t, err)
+	if actual.Cursor != failed.Cursor || actual.Status != "closing" || !s.HasSegment(seg.Path) {
+		t.Fatal("waiting for retry changed the failed recording", actual)
+	}
+	must(t, engine.Tick(context.Background(), now.Add(6*time.Second)))
 	actual, err = s.Event(failed.ID)
 	must(t, err)
 	parts, err := s.Parts(failed.ID)
 	must(t, err)
-	if actual.Status != "closed" || actual.Cursor != seg.End || len(parts) != 1 {
+	if failedAttempts != 2 || actual.Status != "closed" || actual.Cursor != seg.End || len(parts) != 1 {
 		t.Fatal("failed recording was not retried", actual, parts)
 	}
 }
@@ -139,6 +155,11 @@ func TestSensitivityReloadStartsDespiteUnfinishedVideo(t *testing.T) {
 	reported := false
 	for _, notice := range app.runtime.Store.Notices() {
 		if strings.Contains(notice.Message, "Не удалось восстановить часть записей") {
+			for _, detail := range []string{ev.CameraID, ev.ID, seg.Path, "в потоке нет видео", "повтор через 5 с"} {
+				if !strings.Contains(notice.Message, detail) {
+					t.Errorf("recovery notice missing %q: %s", detail, notice.Message)
+				}
+			}
 			reported = true
 		}
 	}
