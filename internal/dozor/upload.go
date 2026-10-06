@@ -158,6 +158,7 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 	}
 	var rel, sha, md string
 	var size int64
+	var uploadedEvent Event
 	if j.Kind == "part" {
 		p, err := s.Part(j.Ref)
 		if err != nil {
@@ -171,17 +172,21 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 		md = p.MD5
 		size = p.Size
 	} else {
+		// Read event and part markers as one snapshot of archive mutations.
+		s.mutate.Lock()
 		ev, err := s.Event(j.Ref)
+		var parts []Part
+		if err == nil {
+			parts, err = s.Parts(ev.ID)
+		}
+		s.mutate.Unlock()
 		if err != nil {
 			return false, err
 		}
 		if ev.Status != "closed" {
 			return false, s.Retry(j, "событие ещё открыто")
 		}
-		parts, err := s.Parts(ev.ID)
-		if err != nil {
-			return false, err
-		}
+		uploadedEvent = ev
 		pending := false
 		for _, p := range parts {
 			if !p.Uploaded && !p.Lost {
@@ -244,6 +249,11 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 		ev, err := s.Event(j.Ref)
 		if err != nil {
 			return false, err
+		}
+		// A disconnect or late tail can revise the manifest during its PUT.
+		// Keep the job until the new recording metadata reaches S3 as well.
+		if ev != uploadedEvent {
+			return true, nil
 		}
 		ev.Uploaded = !ev.Lost
 		if e = s.SaveEvent(ev); e != nil {

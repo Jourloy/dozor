@@ -104,6 +104,7 @@ func HashFile(path string) (sha, md string, size int64, err error) {
 }
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 func MediaConfig(c Config, b Binaries, socket string) ([]byte, error) {
+	hook := shellQuote(b.Self) + " hook --socket " + shellQuote(socket)
 	paths := map[string]any{}
 	for _, cam := range c.Cameras {
 		if !cam.Enabled {
@@ -116,7 +117,7 @@ func MediaConfig(c Config, b Binaries, socket string) ([]byte, error) {
 		"hls": true, "hlsAddress": liveAddress, "hlsAllowOrigins": []string{}, "hlsAlwaysRemux": false,
 		"hlsVariant": "fmp4", "hlsSegmentCount": 7, "hlsSegmentDuration": "1s", "hlsSegmentMaxSize": "16M", "hlsDirectory": "", "hlsMuxerCloseAfter": "15s",
 		"authInternalUsers": []any{map[string]any{"user": "any", "ips": []string{"127.0.0.1", "::1"}, "permissions": []any{map[string]any{"action": "read"}}}},
-		"pathDefaults":      map[string]any{"recordPath": filepath.Join(c.Archive, "buffer", "%path", "%Y-%m-%d_%H-%M-%S.%f"), "recordFormat": "fmp4", "recordPartDuration": "1s", "recordMaxPartSize": "8M", "recordSegmentDuration": "5s", "recordDeleteAfter": "0s", "runOnRecordSegmentComplete": shellQuote(b.Self) + " hook --socket " + shellQuote(socket)}}
+		"pathDefaults":      map[string]any{"recordPath": filepath.Join(c.Archive, "buffer", "%path", "%Y-%m-%d_%H-%M-%S.%f"), "recordFormat": "fmp4", "recordPartDuration": "1s", "recordMaxPartSize": "8M", "recordSegmentDuration": "5s", "recordDeleteAfter": "0s", "runOnRecordSegmentComplete": hook, "runOnOnline": hook + " --stream online", "runOnOffline": hook + " --stream offline"}}
 	return json.MarshalIndent(v, "", "  ") // JSON is a YAML subset; avoids interpolating credentials into syntax.
 }
 func RunMedia(ctx context.Context, c Config, b Binaries, socket, configPath string, notice func(string), ready func(bool)) {
@@ -177,6 +178,10 @@ func ParseSegment(root, path string, duration float64) (Segment, error) {
 // Exclude the newest file per camera while the recorder is alive. A following file
 // proves rotation even if a completion hook was lost. Startup recovery scans all.
 func ScanSegments(ctx context.Context, s *Store, probe string, recorderAlive bool) error {
+	return scanSegments(ctx, s, probe, recorderAlive, s.AddSegment)
+}
+
+func scanSegments(ctx context.Context, s *Store, probe string, recorderAlive bool, register func(Segment) error) error {
 	cams, e := os.ReadDir(filepath.Join(s.Root, "buffer"))
 	if errors.Is(e, os.ErrNotExist) {
 		return nil
@@ -197,22 +202,43 @@ func ScanSegments(ctx context.Context, s *Store, probe string, recorderAlive boo
 		if recorderAlive && len(files) > 0 {
 			files = files[:len(files)-1]
 		}
-		for _, path := range files {
-			rel, _ := filepath.Rel(s.Root, path)
-			if s.HasSegment(rel) {
+		if e := scanSegmentFiles(ctx, s, probe, files, 0, register); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+func scanCameraSegments(ctx context.Context, s *Store, probe, camera string, until int64, register func(Segment) error) error {
+	files, err := filepath.Glob(filepath.Join(s.Root, "buffer", camera, "*.mp4"))
+	if err != nil {
+		return err
+	}
+	return scanSegmentFiles(ctx, s, probe, files, until, register)
+}
+
+func scanSegmentFiles(ctx context.Context, s *Store, probe string, files []string, until int64, register func(Segment) error) error {
+	for _, path := range files {
+		if until > 0 {
+			seg, err := ParseSegment(s.Root, path, 1)
+			if err != nil || seg.Start >= until {
 				continue
 			}
-			p, e := Probe(ctx, probe, path, false)
-			if e != nil {
-				continue
-			}
-			seg, e := ParseSegment(s.Root, path, p.Duration)
-			if e != nil {
-				continue
-			}
-			if e = s.AddSegment(seg); e != nil {
-				return e
-			}
+		}
+		rel, _ := filepath.Rel(s.Root, path)
+		if s.HasSegment(rel) {
+			continue
+		}
+		p, e := Probe(ctx, probe, path, false)
+		if e != nil {
+			continue
+		}
+		seg, e := ParseSegment(s.Root, path, p.Duration)
+		if e != nil {
+			continue
+		}
+		if e = register(seg); e != nil {
+			return e
 		}
 	}
 	return nil

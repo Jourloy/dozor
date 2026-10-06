@@ -294,6 +294,28 @@
     }
   }
 
+  /* ---------- Availability: shared 24-hour axis, one lane per camera ---------- */
+  .availability-body { display: grid; gap: 20px; }
+  .availability-legend { display: flex; flex-wrap: wrap; gap: 12px 20px; list-style: none; color: var(--a00-muted); font-size: 13px; }
+  .availability-legend li { display: flex; align-items: center; gap: 8px; }
+  .availability-legend li::before { content: ''; width: 16px; height: 8px; border-radius: var(--a00-radius-xs); background: var(--availability-color, var(--a00-border)); }
+  [data-state="online"] { --availability-color: var(--a00-success); }
+  [data-state="offline"] { --availability-color: var(--a00-danger); }
+  [data-state="disabled"] { --availability-color: var(--a00-warning); }
+  .availability-axis { display: flex; justify-content: space-between; color: var(--a00-muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-bottom: 12px; }
+  .availability-row + .availability-row { margin-top: 16px; }
+  .availability-row-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin-bottom: 8px; }
+  .availability-name { font-size: 14px; overflow-wrap: anywhere; }
+  .availability-track { position: relative; height: 32px; border-radius: var(--a00-radius-sm); background: var(--a00-soft); cursor: crosshair; overflow: hidden; }
+  .availability-segment { position: absolute; height: 100%; background: var(--availability-color, var(--a00-border)); }
+  .availability-segment[data-state="offline"] { min-width: 2px; z-index: 1; }
+  .availability-segment[data-state="unknown"] { background: repeating-linear-gradient(135deg, var(--a00-soft) 0 4px, var(--a00-border) 4px 8px); }
+  .availability-marker { position: absolute; left: clamp(0px, var(--availability-position, 100%), calc(100% - 2px)); height: 100%; width: 2px; background: var(--a00-ink); pointer-events: none; z-index: 2; }
+  .availability-details { display: grid; gap: 12px; }
+  .availability-detail { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .availability-detail > .ui-hint { flex-basis: 100%; }
+  .event-disconnect, .part-disconnect { color: var(--a00-warning); font-size: 12px; line-height: 1.5; }
+
   /* ---------- Events ---------- */
   /* Keep the current picture readable on wide screens. */
   .live-frame {

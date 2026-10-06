@@ -14,12 +14,14 @@ import (
 )
 
 type Runtime struct {
-	Store      *Store
-	Engine     *Engine
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	segments   chan Segment
-	mediaSince atomic.Int64
+	Store         *Store
+	Engine        *Engine
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	segments      chan Segment
+	mediaSince    atomic.Int64
+	streams       map[string]AvailabilityInterval
+	streamSignals chan StreamSignal
 }
 type App struct {
 	Config                    *ConfigFile
@@ -84,6 +86,11 @@ func (a *App) start(ctx context.Context) error {
 		cancel()
 		return e
 	}
+	if e = r.initStreams(c.Cameras, time.Now()); e != nil {
+		s.Close()
+		cancel()
+		return e
+	}
 	if c.S3.Enabled {
 		if e = s.SetTarget(c.S3); e != nil {
 			s.Close()
@@ -99,6 +106,15 @@ func (a *App) start(ctx context.Context) error {
 				r.mediaSince.Store(time.Now().Unix())
 			} else {
 				r.mediaSince.Store(0)
+				// A crashed recorder may never run its per-path offline hooks.
+				for _, cam := range c.Cameras {
+					if cam.Enabled {
+						select {
+						case r.streamSignals <- StreamSignal{CameraID: cam.ID, At: time.Now().UnixMilli()}:
+						default:
+						}
+					}
+				}
 			}
 		})
 	})
@@ -130,6 +146,11 @@ func (a *App) stop() {
 	a.runtime = nil
 	r.cancel()
 	r.wg.Wait()
+	finishCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.finishDisabledStreams(finishCtx, a.Config.Get().Cameras, time.Now()); err != nil {
+		r.Store.Notice("Не удалось завершить запись выключенной камеры; повтор при восстановлении")
+	}
 	_ = r.Store.Close()
 }
 func (a *App) Run(ctx context.Context) error {
@@ -187,16 +208,19 @@ func (a *App) Run(ctx context.Context) error {
 			}
 			for len(r.segments) > 0 {
 				seg := <-r.segments
-				if e := r.Store.AddSegment(seg); e != nil {
+				if e := r.Engine.AddSegment(seg); e != nil {
 					r.Store.Notice("Ошибка каталога фрагментов")
 				}
+			}
+			if e := r.tickStreams(ctx, time.Now()); e != nil {
+				r.Store.Notice("Не удалось обновить доступность камер")
 			}
 			if e := r.Engine.Tick(ctx, time.Now()); e != nil {
 				r.Store.Notice("Ошибка обработки архива; повтор будет выполнен")
 			}
 			iteration++
 			if iteration%15 == 0 {
-				if e := ScanSegments(ctx, r.Store, a.Bins.FFprobe, true); e != nil {
+				if e := r.reconcileSegments(ctx); e != nil {
 					r.Store.Notice("Не удалось сверить буфер")
 				}
 				if !a.Development {
@@ -211,6 +235,32 @@ func (a *App) Run(ctx context.Context) error {
 }
 func (a *App) internalHandler() http.Handler {
 	m := http.NewServeMux()
+	m.HandleFunc("POST /stream", func(w http.ResponseWriter, r *http.Request) {
+		var v StreamSignal
+		if !decode(w, r, &v) {
+			return
+		}
+		if !safeID.MatchString(v.CameraID) || v.At <= 0 || v.At > time.Now().Add(time.Second).UnixMilli() {
+			apiError(w, 400, "неверное состояние потока")
+			return
+		}
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+		if a.runtime == nil {
+			apiError(w, 503, "диск недоступен")
+			return
+		}
+		if _, ok := a.runtime.streams[v.CameraID]; !ok {
+			apiError(w, 404, "камера не найдена")
+			return
+		}
+		select {
+		case a.runtime.streamSignals <- v:
+			w.WriteHeader(204)
+		default:
+			apiError(w, 503, "очередь занята")
+		}
+	})
 	m.HandleFunc("POST /segment", func(w http.ResponseWriter, r *http.Request) {
 		var v struct {
 			Path     string  `json:"path"`
@@ -286,7 +336,8 @@ func (a *App) Status() map[string]any {
 			var last int64
 			_ = r.Store.DB.QueryRow("SELECT COALESCE(MAX(end),0) FROM segments WHERE camera=?", cam.ID).Scan(&last)
 			st := states[cam.ID]
-			cams = append(cams, map[string]any{"id": cam.ID, "name": cam.Name, "enabled": cam.Enabled, "online": last > time.Now().Add(-20*time.Second).UnixMilli(), "last_segment": last, "motion": st.Active, "detector_healthy": st.Healthy, "source": st.Source})
+			online := cam.Enabled && r.mediaSince.Load() > 0 && r.streams[cam.ID].State == "online"
+			cams = append(cams, map[string]any{"id": cam.ID, "name": cam.Name, "enabled": cam.Enabled, "online": online, "last_segment": last, "motion": st.Active, "detector_healthy": st.Healthy, "source": st.Source})
 		}
 		m["cameras"] = cams
 	}

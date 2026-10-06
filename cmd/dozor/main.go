@@ -129,22 +129,34 @@ func run() error {
 func hook() error {
 	f := flag.NewFlagSet("hook", flag.ContinueOnError)
 	socket := f.String("socket", "/run/dozor/control.sock", "control socket")
+	stream := f.String("stream", "", "stream state: online or offline")
 	if e := f.Parse(os.Args[2:]); e != nil {
 		return e
 	}
-	duration, e := strconv.ParseFloat(os.Getenv("MTX_SEGMENT_DURATION"), 64)
-	if e != nil {
-		return e
+	endpoint := "/segment"
+	var payload any
+	if *stream != "" {
+		if *stream != "online" && *stream != "offline" {
+			return errors.New("invalid stream state")
+		}
+		endpoint = "/stream"
+		payload = dozor.StreamSignal{CameraID: os.Getenv("MTX_PATH"), Online: *stream == "online", At: time.Now().UnixMilli()}
+	} else {
+		duration, e := strconv.ParseFloat(os.Getenv("MTX_SEGMENT_DURATION"), 64)
+		if e != nil {
+			return e
+		}
+		payload = map[string]any{"path": os.Getenv("MTX_SEGMENT_PATH"), "duration": duration}
 	}
-	b, _ := json.Marshal(map[string]any{"path": os.Getenv("MTX_SEGMENT_PATH"), "duration": duration})
-	res, e := dozor.UnixClient(*socket).Post("http://unix/segment", "application/json", bytes.NewReader(b))
+	b, _ := json.Marshal(payload)
+	res, e := dozor.UnixClient(*socket).Post("http://unix"+endpoint, "application/json", bytes.NewReader(b))
 	if e != nil {
-		return errors.New("segment notification deferred to reconciliation")
+		return errors.New("media notification deferred to reconciliation")
 	}
 	defer res.Body.Close()
 	io.Copy(io.Discard, res.Body)
 	if res.StatusCode != 204 {
-		return errors.New("segment notification rejected")
+		return errors.New("media notification rejected")
 	}
 	return nil
 }

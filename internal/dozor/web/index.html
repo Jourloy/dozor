@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/vendor/a00-menu.css">
 <script src="/vendor/hls-1.7.3.min.js" defer></script>
 <script src="/live.js" defer></script>
+<script src="/availability.js" defer></script>
 <script src="/vendor/a00-menu.js" defer></script>
 <script src="/app.js" defer></script>
 </head>
@@ -170,6 +171,42 @@
         </div>
       </section>
 
+      <section class="ui-card" aria-labelledby="availability-title">
+        <div class="ui-card-header">
+          <h2 class="ui-card-title" id="availability-title">Доступность камер</h2>
+          <p class="ui-card-description">Последние 24 часа · выберите время на графике</p>
+        </div>
+        <div class="ui-card-content availability-body">
+          <div class="filter-bar">
+            <div class="ui-field">
+              <label class="ui-label" for="availability-camera">Камера</label>
+              <div class="ui-select-wrap">
+                <select class="ui-select" id="availability-camera"><option value="">Все камеры</option></select>
+                <svg class="ui-icon ui-select-icon" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+              </div>
+            </div>
+            <button type="button" class="ui-button" data-variant="outline" id="refresh-availability"><svg class="ui-icon" data-icon="inline-start" aria-hidden="true"><use href="#i-refresh"/></svg>Обновить</button>
+          </div>
+          <ul class="availability-legend" aria-label="Обозначения графика">
+            <li data-state="online">В сети</li>
+            <li data-state="offline">Нет связи</li>
+            <li data-state="disabled">Выключена</li>
+            <li data-state="unknown">Нет данных</li>
+          </ul>
+          <p class="ui-hint" id="availability-message" role="status">Загружаем историю…</p>
+          <div id="availability-chart"></div>
+          <div class="ui-field" id="availability-time-field" hidden>
+            <div class="timeline-head">
+              <label class="ui-label" for="availability-time">Состояние в выбранное время</label>
+              <output class="timeline-time" id="availability-at" for="availability-time"></output>
+            </div>
+            <input class="ui-slider" id="availability-time" type="range" step="1000">
+          </div>
+          <div class="availability-details" id="availability-details" aria-live="polite"></div>
+          <p class="ui-hint">«Нет данных» — время до начала наблюдения или когда Dozor не работал. История хранится на диске архива.</p>
+        </div>
+      </section>
+
       <div class="overview-grid">
         <section class="ui-card" aria-labelledby="cams-title">
           <div class="ui-card-header">
@@ -272,6 +309,7 @@
               <p class="ui-label" id="parts-label">Части записи</p>
               <div class="ui-toggle-group" id="parts" role="group" aria-labelledby="parts-label"></div>
             </div>
+            <p class="ui-hint part-disconnect" id="part-disconnect" hidden></p>
             <div class="player-actions">
               <a class="ui-button" data-variant="link" data-size="sm" id="download" hidden><svg class="ui-icon" data-icon="inline-start" aria-hidden="true"><use href="#i-download"/></svg>Скачать часть</a>
             </div>

@@ -110,6 +110,38 @@ func (a *App) Handler() http.Handler {
 		w.WriteHeader(204)
 	}))
 	m.HandleFunc("GET /api/v1/status", a.protected(func(w http.ResponseWriter, r *http.Request) { jsonOut(w, 200, a.Status()) }))
+	m.HandleFunc("GET /api/v1/availability", a.protected(func(w http.ResponseWriter, r *http.Request) {
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+		if a.runtime == nil {
+			apiError(w, 503, "диск недоступен")
+			return
+		}
+		camera := r.URL.Query().Get("camera")
+		cameras := a.Config.Get().Cameras
+		if camera != "" {
+			found := false
+			for _, cam := range cameras {
+				found = found || cam.ID == camera
+			}
+			if !found {
+				apiError(w, 404, "камера не найдена")
+				return
+			}
+		}
+		// End the visible window at the last observation, so the sub-second
+		// delay between the worker tick and this request is not an unknown gap.
+		observed := time.Now().UnixMilli()
+		for _, state := range a.runtime.streams {
+			observed = min(observed, state.End)
+		}
+		history, err := a.runtime.Store.Availability(cameras, camera, time.UnixMilli(observed))
+		if err != nil {
+			apiError(w, 500, "история доступности недоступна")
+			return
+		}
+		jsonOut(w, 200, history)
+	}))
 	m.HandleFunc("GET /api/v1/settings", a.protected(func(w http.ResponseWriter, r *http.Request) { jsonOut(w, 200, PublicConfig(a.Config.Get())) }))
 	m.HandleFunc("PUT /api/v1/settings", a.protected(func(w http.ResponseWriter, r *http.Request) {
 		var v struct {

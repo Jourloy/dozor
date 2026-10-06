@@ -23,6 +23,7 @@ type Event struct {
 	Incomplete     bool   `json:"incomplete"`
 	Uploaded       bool   `json:"uploaded"`
 	Lost           bool   `json:"lost"`
+	DisconnectedAt int64  `json:"disconnected_at,omitempty"`
 }
 type Segment struct {
 	Path     string `json:"path"`
@@ -31,19 +32,20 @@ type Segment struct {
 	End      int64  `json:"end"`
 }
 type Part struct {
-	ID       string `json:"id"`
-	EventID  string `json:"event_id"`
-	CameraID string `json:"camera_id"`
-	Path     string `json:"path"`
-	Start    int64  `json:"start"`
-	End      int64  `json:"end"`
-	Size     int64  `json:"size"`
-	SHA256   string `json:"sha256"`
-	MD5      string `json:"md5"`
-	Uploaded bool   `json:"uploaded"`
-	Deleted  bool   `json:"deleted"`
-	Lost     bool   `json:"lost"`
-	Gaps     []Gap  `json:"gaps,omitempty"`
+	ID             string `json:"id"`
+	EventID        string `json:"event_id"`
+	CameraID       string `json:"camera_id"`
+	Path           string `json:"path"`
+	Start          int64  `json:"start"`
+	End            int64  `json:"end"`
+	Size           int64  `json:"size"`
+	SHA256         string `json:"sha256"`
+	MD5            string `json:"md5"`
+	Uploaded       bool   `json:"uploaded"`
+	Deleted        bool   `json:"deleted"`
+	Lost           bool   `json:"lost"`
+	Gaps           []Gap  `json:"gaps,omitempty"`
+	DisconnectedAt int64  `json:"disconnected_at,omitempty"`
 }
 type Gap struct {
 	Start int64 `json:"start"`
@@ -81,13 +83,16 @@ func OpenStore(g Guard) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	_, e = db.Exec(`CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,camera TEXT NOT NULL,start INTEGER,end INTEGER,cursor INTEGER,status TEXT,payload TEXT NOT NULL);
+ CREATE INDEX IF NOT EXISTS events_camera_end ON events(camera,end);
  CREATE TABLE IF NOT EXISTS segments(path TEXT PRIMARY KEY,camera TEXT,start INTEGER,end INTEGER);
  CREATE INDEX IF NOT EXISTS segments_time ON segments(camera,start);
  CREATE TABLE IF NOT EXISTS parts(id TEXT PRIMARY KEY,event TEXT,start INTEGER,end INTEGER,uploaded INTEGER DEFAULT 0,deleted INTEGER DEFAULT 0,payload TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS parts_event ON parts(event,start);
  CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,kind TEXT,ref TEXT,attempts INTEGER DEFAULT 0,next INTEGER DEFAULT 0,error TEXT DEFAULT '');
  CREATE TABLE IF NOT EXISTS notices(at INTEGER,message TEXT);
- CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT);`)
+ CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT);
+ CREATE TABLE IF NOT EXISTS availability(camera TEXT,start INTEGER,end INTEGER,state TEXT,PRIMARY KEY(camera,start));
+ CREATE INDEX IF NOT EXISTS availability_end ON availability(end);`)
 	if e != nil {
 		db.Close()
 		return nil, e

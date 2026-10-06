@@ -454,6 +454,11 @@
   /** Back to the login card: a logout, an expired session, or a first run (setup). */
   function showLogin({setup = false, notice = ''} = {}) {
     stopPlayer();
+    availability.token++;
+    availability.data = null;
+    availability.selectedAt = null;
+    $('#availability-chart').replaceChildren();
+    $('#availability-details').replaceChildren();
     for (const dialog of $$('dialog[open]')) dialog.close();
     csrf = '';
     settings = null;
@@ -544,6 +549,7 @@
     else renderLive();
     window.scrollTo(0, 0);
     if (tab === 'events') run(() => loadEvents())();
+    if (tab === 'overview') loadAvailability();
   }
   window.addEventListener('hashchange', () => {
     if (screen === 'shell') route();
@@ -642,6 +648,7 @@
   }
   function cameraBadge(camera) {
     if (!camera.enabled) return badge('Отключена', 'secondary');
+    if (!camera.online) return badge('Нет связи', 'destructive');
     if (!camera.detector_healthy) return badge('Резервная непрерывная запись', 'warning');
     if (camera.motion) return badge('Есть движение', 'info');
     return badge('Наблюдение', 'success');
@@ -736,6 +743,94 @@
     renderUpdateStatus(s.update_status);
     renderLive();
   }
+
+  // ------------------------------------------------------------------ availability history
+  const availability = {data: null, token: 0, selectedAt: null, rows: []};
+  const AVAILABILITY_LABELS = {online: 'В сети', offline: 'Нет связи', disabled: 'Выключена', unknown: 'Нет данных'};
+  const AVAILABILITY_VARIANTS = {online: 'success', offline: 'destructive', disabled: 'secondary', unknown: 'secondary'};
+  const availabilitySlider = $('#availability-time');
+
+  function renderAvailabilityTime(value) {
+    if (!availability.data) return;
+    availability.selectedAt = Math.max(availability.data.start, Math.min(availability.data.end, value));
+    availabilitySlider.value = String(availability.selectedAt);
+    setSliderFill(availabilitySlider);
+    setText($('#availability-at'), time(availability.selectedAt));
+    availabilitySlider.setAttribute('aria-valuetext', time(availability.selectedAt));
+    const share = (availability.selectedAt - availability.data.start) / (availability.data.end - availability.data.start);
+    const details = $('#availability-details');
+    details.replaceChildren();
+    for (const row of availability.rows) {
+      row.track.style.setProperty('--availability-position', share * 100 + '%');
+      const interval = window.DozorAvailability.at(row.intervals, availability.selectedAt);
+      const state = interval ? interval.state : 'unknown';
+      details.append(el('div', {class: 'availability-detail'},
+        el('span', {class: 'availability-name', text: row.camera.name}),
+        badge(AVAILABILITY_LABELS[state], AVAILABILITY_VARIANTS[state]),
+        interval ? el('span', {class: 'ui-hint', text: time(interval.start) + ' — ' + time(interval.end)}) : null));
+    }
+  }
+
+  function renderAvailability() {
+    const data = availability.data;
+    const box = $('#availability-chart');
+    box.replaceChildren();
+    availability.rows = [];
+    $('#availability-time-field').hidden = !data.cameras.length;
+    $('#availability-details').replaceChildren();
+    if (!data.cameras.length) return;
+    const axis = el('div', {class: 'availability-axis', 'aria-hidden': 'true'});
+    for (let i = 0; i <= 4; i++) axis.append(el('span', {text: clock(data.start + (data.end - data.start) * i / 4)}));
+    box.append(axis);
+    for (const camera of data.cameras) {
+      const intervals = window.DozorAvailability.intervals(data, camera);
+      const online = intervals.reduce((sum, v) => sum + (v.state === 'online' ? v.end - v.start : 0), 0);
+      const known = intervals.reduce((sum, v) => sum + (v.state === 'online' || v.state === 'offline' ? v.end - v.start : 0), 0);
+      const track = el('div', {class: 'availability-track', 'aria-hidden': 'true'});
+      for (const interval of intervals) {
+        const segment = el('span', {class: 'availability-segment', dataset: {state: interval.state}, title: camera.name + ': ' + AVAILABILITY_LABELS[interval.state] + ' · ' + time(interval.start) + ' — ' + time(interval.end)});
+        segment.style.setProperty('left', (interval.start - data.start) / (data.end - data.start) * 100 + '%');
+        segment.style.setProperty('width', (interval.end - interval.start) / (data.end - data.start) * 100 + '%');
+        track.append(segment);
+      }
+      track.append(el('span', {class: 'availability-marker'}));
+      track.addEventListener('click', event => {
+        const rect = track.getBoundingClientRect();
+        renderAvailabilityTime(data.start + (event.clientX - rect.left) / rect.width * (data.end - data.start));
+      });
+      box.append(el('div', {class: 'availability-row'},
+        el('div', {class: 'availability-row-head'}, el('span', {class: 'availability-name', text: camera.name}),
+          el('span', {class: 'ui-hint', text: known ? 'В сети ' + percent.format(online / known) + ' времени наблюдения' : 'Нет наблюдений'})), track));
+      availability.rows.push({camera, intervals, track});
+    }
+    availabilitySlider.min = String(data.start);
+    availabilitySlider.max = String(data.end);
+    renderAvailabilityTime(availability.selectedAt ?? data.end);
+  }
+
+  async function loadAvailability() {
+    if (!settings || screen !== 'shell' || currentTab !== 'overview') return;
+    const token = ++availability.token;
+    const camera = $('#availability-camera').value;
+    try {
+      const data = await api('/availability' + (camera ? '?camera=' + encodeURIComponent(camera) : ''));
+      if (token !== availability.token || screen !== 'shell') return;
+      if (availability.data && availability.selectedAt === availability.data.end) availability.selectedAt = null;
+      availability.data = data;
+      setText($('#availability-message'), data.cameras.length ? time(data.start) + ' — ' + time(data.end) : 'Добавьте камеру, чтобы видеть историю доступности.');
+      renderAvailability();
+    } catch (error) {
+      if (token !== availability.token || (error && error.handled)) return;
+      availability.data = null;
+      $('#availability-chart').replaceChildren();
+      $('#availability-details').replaceChildren();
+      $('#availability-time-field').hidden = true;
+      setText($('#availability-message'), error.status === 503 ? 'История недоступна, пока не подключён диск.' : 'Не удалось загрузить историю. Повторите обновление.');
+    }
+  }
+  $('#availability-camera').addEventListener('change', () => { availability.data = null; loadAvailability(); });
+  $('#refresh-availability').addEventListener('click', run(loadAvailability));
+  availabilitySlider.addEventListener('input', () => renderAvailabilityTime(Number(availabilitySlider.value)));
 
   // ------------------------------------------------------------------ live view
   let selectedLiveCamera = '';
@@ -852,6 +947,14 @@
       grid.append(cameraCard(camera));
     }
     filter.value = settings.cameras.some(c => c.id === selected) ? selected : '';
+    const availabilityFilter = $('#availability-camera');
+    const selectedAvailability = availabilityFilter.value;
+    availabilityFilter.replaceChildren(new Option('Все камеры', ''));
+    for (const camera of settings.cameras) availabilityFilter.add(new Option(camera.name, camera.id));
+    availabilityFilter.value = settings.cameras.some(c => c.id === selectedAvailability) ? selectedAvailability : '';
+    availability.data = null;
+    availability.selectedAt = null;
+    loadAvailability();
     if (!settings.cameras.length) {
       grid.append(
         emptyState({
@@ -1154,7 +1257,7 @@
       const row = el(
         'button',
         {type: 'button', class: 'ui-item event-row', dataset: {id: event.id}, 'aria-current': event.id === eventsState.selectedId ? 'true' : null},
-        el('span', {class: 'ui-item-content'}, el('span', {class: 'ui-item-title', text: nameOf(event.camera_id)}), el('span', {class: 'ui-item-description event-time', text: time(event.start)})),
+        el('span', {class: 'ui-item-content'}, el('span', {class: 'ui-item-title', text: nameOf(event.camera_id)}), el('span', {class: 'ui-item-description event-time', text: time(event.start)}), event.disconnected_at ? el('span', {class: 'event-disconnect', text: t('Последняя запись перед отключением камеры')}) : null),
         badge(label, variant)
       );
       row.addEventListener('click', run(() => openEvent(event.id), {button: row}));
@@ -1213,6 +1316,7 @@
     eventParts = [];
     partIndex = 0;
     setText($('#event-title'), 'Выберите событие');
+    $('#part-disconnect').hidden = true;
     $('#event-info').hidden = true;
     $('#player-body').hidden = true;
     $('#player-empty').hidden = false;
@@ -1230,6 +1334,7 @@
     if (event.short_prebuffer) flags.push('неполная предыстория');
     if (event.incomplete) flags.push('есть пропуски');
     if (event.lost) flags.push('часть записей удалена до выгрузки');
+    if (event.disconnected_at) flags.push('последняя запись перед отключением камеры · отключение ' + time(event.disconnected_at));
     info.replaceChildren(el('p', {text: time(event.start) + ' — ' + time(event.end)}));
     if (flags.length) info.append(el('p', {text: capitalize(t(flags.join(' · ')))}));
     info.hidden = false;
@@ -1254,12 +1359,13 @@
     $('#timeline-field').hidden = !has;
     $('#parts-field').hidden = !has;
     const partsBox = $('#parts');
+    $('#part-disconnect').hidden = true;
     partsBox.replaceChildren();
     if (has) {
       timeline.min = String(eventParts[0].start);
       timeline.max = String(eventParts[eventParts.length - 1].end);
       for (const [i, part] of eventParts.entries()) {
-        const toggle = el('button', {type: 'button', class: 'ui-toggle', 'aria-pressed': 'false', text: clock(part.start)});
+        const toggle = el('button', {type: 'button', class: 'ui-toggle', 'aria-pressed': 'false', text: clock(part.start) + (part.disconnected_at ? ' · перед отключением' : '')});
         toggle.addEventListener('click', () => playPart(i));
         partsBox.append(toggle);
       }
@@ -1273,6 +1379,8 @@
   function playPart(index, offset = 0) {
     partIndex = index;
     const part = eventParts[index];
+    $('#part-disconnect').hidden = !part.disconnected_at;
+    setText($('#part-disconnect'), part.disconnected_at ? t('Последняя запись перед отключением камеры · ' + time(part.disconnected_at)) : '');
     updateTimeline(part.start);
     video.onloadedmetadata = () => {
       video.currentTime = offset;
@@ -1525,6 +1633,7 @@
     polling = true;
     try {
       await refreshStatus();
+      await loadAvailability();
     } catch (error) {
       if (!(error && error.handled)) {
         failures += 1;
