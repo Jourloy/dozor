@@ -2,6 +2,7 @@ package dozor
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -239,6 +240,8 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	var assemblyError error
+eventsLoop:
 	for _, ev := range events {
 		expired := now.UnixMilli() > ev.End+12000 || ev.Status == "closing"
 		segs, err := e.Store.Segments(ev.CameraID, ev.Cursor, ev.End)
@@ -267,7 +270,19 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) error {
 				}
 				p, err := e.assemble(ctx, e.Store, e.Bins, ev, selected)
 				if err != nil {
-					return err
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					if !errors.Is(err, errVideoAssembly) {
+						return err
+					}
+					if guardErr := e.Store.Guard.Check(); guardErr != nil {
+						return guardErr
+					}
+					// Keep this event's cursor and buffer for retry, but let
+					// later events (including this camera's) make progress.
+					assemblyError = errors.Join(assemblyError, err)
+					continue eventsLoop
 				}
 				ev.Cursor = p.End
 				if err = e.Store.SaveEvent(ev); err != nil {
@@ -300,5 +315,8 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) error {
 			}
 		}
 	}
-	return e.Store.PruneBuffer(now)
+	if err := e.Store.PruneBuffer(now); err != nil {
+		return err
+	}
+	return assemblyError
 }

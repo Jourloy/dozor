@@ -80,11 +80,15 @@ func (a *App) start(ctx context.Context) error {
 		cancel()
 		return e
 	}
-	// Complete interrupted events before new streams can reuse their buffered history.
+	// Try interrupted events before starting new streams. A failed remux keeps
+	// its buffer pinned for later ticks and must not prevent recording startup.
 	if e = r.Engine.Tick(rctx, time.Now()); e != nil {
-		s.Close()
-		cancel()
-		return e
+		if !errors.Is(e, errVideoAssembly) {
+			s.Close()
+			cancel()
+			return e
+		}
+		s.Notice("Не удалось восстановить часть записей; повтор будет выполнен автоматически")
 	}
 	if e = r.initStreams(c.Cameras, time.Now()); e != nil {
 		s.Close()

@@ -631,6 +631,19 @@
     setText(node, text);
     if (node.dataset.variant !== variant) node.dataset.variant = variant;
   }
+  function archiveUnavailableState() {
+    const configured = Boolean(settings && settings.disk_uuid);
+    const error = snapshot && snapshot.storage_error;
+    if (configured && !error) {
+      return {title: 'Запуск записи…', pending: true, description: t('Архив открывается. Статус обновится автоматически.'), action: null};
+    }
+    return {
+      title: configured ? 'Архив недоступен' : 'Требуется настройка диска',
+      pending: false,
+      description: humanize(error, t(configured ? 'Не удалось открыть архив на выбранном диске. Проверьте подключение и настройки.' : 'Подключите и выберите диск в настройках.')),
+      action: configured ? 'Проверить настройки' : 'Выбрать диск',
+    };
+  }
   function renderConnection() {
     const badgeNode = $('#system-badge');
     const note = $('#system-updated');
@@ -644,7 +657,10 @@
     note.hidden = true;
     if (!snapshot) setBadge(badgeNode, 'Подключаемся…', 'secondary');
     else if (snapshot.disk_ready) setBadge(badgeNode, 'Система работает', 'success');
-    else setBadge(badgeNode, 'Требуется настройка диска', 'warning');
+    else {
+      const storage = archiveUnavailableState();
+      setBadge(badgeNode, storage.title, storage.pending ? 'secondary' : 'warning');
+    }
   }
   function cameraBadge(camera) {
     if (!camera.enabled) return badge('Отключена', 'secondary');
@@ -678,8 +694,11 @@
 
     // alerts
     const storage = $('#storage-alert');
-    storage.hidden = Boolean(s.disk_ready);
-    setText($('#storage-alert-text'), humanize(s.storage_error, t('Подключите и выберите диск в настройках.')));
+    const storageState = archiveUnavailableState();
+    storage.hidden = Boolean(s.disk_ready) || storageState.pending;
+    setText($('#storage-alert-title'), storageState.title);
+    setText($('#storage-alert-text'), storageState.description);
+    setText($('#storage-alert-action'), storageState.action || 'Проверить настройки');
     const upload = $('#s3-alert');
     upload.hidden = !(settings.s3.enabled && s.upload_error);
     setText($('#s3-alert-text'), humanize(s.upload_error, t('Часть записей не удалось выгрузить. Выгрузка повторится автоматически.')));
@@ -702,7 +721,7 @@
       meter.hidden = false;
     } else {
       setText($('#stat-disk'), '—');
-      setText($('#stat-disk-detail'), 'ожидаем диск');
+      setText($('#stat-disk-detail'), settings.disk_uuid ? (storageState.pending ? 'архив открывается' : 'архив недоступен') : 'ожидаем диск');
       meter.hidden = true;
     }
     setText($('#stat-queue'), number.format(Number(s.queue) || 0));
@@ -710,12 +729,12 @@
 
     // cameras
     const list = $('#camera-status');
-    renderIfChanged(list, [s.cameras, settings.cameras.length, zone], () => {
+    renderIfChanged(list, [s.cameras, settings.cameras.length, zone, storageState.description], () => {
       list.replaceChildren();
       if (!settings.cameras.length) {
         list.append(emptyState({description: t('Добавьте первую камеру — с поиска в сети или по RTSP-адресу.'), compact: true, action: el('a', {class: 'ui-button', dataset: {variant: 'outline', size: 'sm'}, href: '#cameras', text: t('Перейти к камерам')})}));
       } else if (!s.cameras.length) {
-        list.append(emptyState({description: t('Состояние камер появится, когда подключится диск.'), compact: true}));
+        list.append(emptyState({description: storageState.description, compact: true}));
       } else {
         const rows = el('ul', {class: 'ui-item-list', dataset: {divided: ''}});
         for (const c of s.cameras) {
@@ -825,7 +844,7 @@
       $('#availability-chart').replaceChildren();
       $('#availability-details').replaceChildren();
       $('#availability-time-field').hidden = true;
-      setText($('#availability-message'), error.status === 503 ? 'История недоступна, пока не подключён диск.' : 'Не удалось загрузить историю. Повторите обновление.');
+      setText($('#availability-message'), error.status === 503 ? archiveUnavailableState().description : 'Не удалось загрузить историю. Повторите обновление.');
     }
   }
   $('#availability-camera').addEventListener('change', () => { availability.data = null; loadAvailability(); });
@@ -879,7 +898,7 @@
       const hasCameras = cameras.length > 0;
       $('#live-empty').replaceChildren(emptyState({
         title: hasCameras ? 'Видеослужба недоступна' : 'Нет включённых камер',
-        description: hasCameras ? 'Подключите диск и дождитесь запуска камер. Онлайн-просмотр использует работающую видеослужбу.' : 'Добавьте камеру или включите существующую в разделе «Камеры».',
+        description: hasCameras ? archiveUnavailableState().description : 'Добавьте камеру или включите существующую в разделе «Камеры».',
         sticker: 'dual-camera', bordered: true,
         action: el('a', {class: 'ui-button', href: hasCameras ? '#settings' : '#cameras', text: hasCameras ? 'Перейти к настройкам' : 'Перейти к камерам'}),
       }));
@@ -1222,10 +1241,12 @@
       if (eventsState.refocus && target && lost) target.focus();
       eventsState.refocus = false;
     };
-    // No disk is not a failure to retry: say what is missing and where to fix it (00.md section 10.7).
+    // A settings reload also makes the archive briefly unavailable; keep the
+    // explanation consistent with the system badge instead of asking for a disk.
     const unavailable = () => {
-      const link = el('a', {class: 'ui-button', dataset: {variant: 'outline', size: 'sm'}, href: '#settings', text: 'Выбрать диск'});
-      box.append(emptyState({description: 'Архив недоступен, пока не подключён диск.', compact: true, action: link}));
+      const state = archiveUnavailableState();
+      const link = state.action ? el('a', {class: 'ui-button', dataset: {variant: 'outline', size: 'sm'}, href: '#settings', text: state.action}) : null;
+      box.append(emptyState({title: state.title, description: state.description, compact: true, action: link}));
       settle(link);
     };
     if (loading) {
@@ -1289,7 +1310,7 @@
     } catch (error) {
       if (token !== eventsState.loadToken || (error && error.handled)) return;
       if (!append) eventsState.items = [];
-      // The archive answers 503 while no disk is mounted (the status says the same with disk_ready).
+      // The archive answers 503 while unavailable, including a settings reload.
       const status = (error && error.status) || 0;
       eventsState.unavailable = status === 503 || (status > 0 && Boolean(snapshot && snapshot.disk_ready === false));
       eventsState.error = messageOf(error);

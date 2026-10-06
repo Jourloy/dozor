@@ -243,6 +243,11 @@ func scanSegmentFiles(ctx context.Context, s *Store, probe string, files []strin
 	}
 	return nil
 }
+
+// Video tool failures can be retried without taking a healthy archive offline.
+// Filesystem and catalog errors must still propagate as storage failures.
+var errVideoAssembly = errors.New("не удалось собрать MP4")
+
 func Assemble(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segment) (Part, error) {
 	p := Part{ID: ID(), EventID: ev.ID, CameraID: ev.CameraID, Start: segs[0].Start, End: segs[len(segs)-1].End}
 	p.Path = filepath.Join(eventDir(ev), fmt.Sprintf("%d-%s.mp4", p.Start, p.ID))
@@ -284,10 +289,10 @@ func Assemble(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segmen
 	cmd := exec.CommandContext(ctx, b.FFmpeg, "-nostdin", "-v", "error", "-f", "concat", "-safe", "1", "-i", list.Name(), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", "-y", partial)
 	cmd.Stderr = io.Discard
 	if e = cmd.Run(); e != nil {
-		return p, errors.New("не удалось собрать MP4")
+		return p, errVideoAssembly
 	}
 	if _, e = Probe(ctx, b.FFprobe, partial, false); e != nil {
-		return p, e
+		return p, fmt.Errorf("%w: %w", errVideoAssembly, e)
 	}
 	p.SHA256, p.MD5, p.Size, e = HashFile(partial)
 	if e != nil {
