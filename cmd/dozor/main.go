@@ -54,7 +54,7 @@ func run() error {
 	config := f.String("config", "/var/lib/dozor/config.json", "configuration file")
 	state := f.String("state", "/var/lib/dozor", "local state directory")
 	socket := f.String("socket", "/run/dozor/control.sock", "private control socket")
-	dev := f.Bool("development", false, "explicitly allow a directory instead of an ext4 mount; localhost only")
+	dev := f.Bool("development", false, "explicitly allow a directory instead of an ext4/exFAT mount; localhost only")
 	archive := f.String("archive", "", "override archive in development mode")
 	listen := f.String("listen", "", "override listen address")
 	if e := f.Parse(os.Args[1:]); e != nil {

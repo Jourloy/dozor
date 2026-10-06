@@ -268,7 +268,7 @@ func (a *App) Handler() http.Handler {
 		cmd.Stdout = io.Discard
 		cmd.Stderr = io.Discard
 		if cmd.Run() != nil {
-			apiError(w, 400, "не удалось подключить ext4: проверьте UUID, занятость диска и установку системного помощника")
+			apiError(w, 400, "не удалось подключить ext4 или exFAT: проверьте UUID, занятость диска и версию системного помощника")
 			return
 		}
 		c := a.Config.Get()
@@ -475,4 +475,4 @@ func (a *App) video(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, p.ID+".mp4", fi.ModTime(), f)
 }
 
-var diskUUIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+var diskUUIDPattern = regexp.MustCompile(`^([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}|[a-fA-F0-9]{4}-[a-fA-F0-9]{4})$`)

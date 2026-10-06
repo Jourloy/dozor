@@ -43,6 +43,47 @@ type Guard struct {
 	Development bool
 }
 
+func supportedArchiveFS(fsType string) bool {
+	return fsType == "ext4" || fsType == "exfat"
+}
+
+type archiveMountInfo struct {
+	Target, UUID, FSType, Options string
+}
+
+func archiveMount(root string) (archiveMountInfo, error) {
+	b, e := exec.Command("findmnt", "--json", "--mountpoint", root, "--output", "TARGET,UUID,FSTYPE,OPTIONS").Output()
+	if e != nil {
+		return archiveMountInfo{}, errors.New("диск отключён")
+	}
+	var v struct {
+		Filesystems []archiveMountInfo
+	}
+	if e = json.Unmarshal(b, &v); e != nil {
+		return archiveMountInfo{}, e
+	}
+	if len(v.Filesystems) != 1 {
+		return archiveMountInfo{}, errors.New("диск не смонтирован")
+	}
+	return v.Filesystems[0], nil
+}
+
+func mountOptionsInclude(actual, required string) bool {
+	for _, option := range strings.Split(required, ",") {
+		if !strings.Contains(","+actual+",", ","+option+",") {
+			return false
+		}
+	}
+	return true
+}
+
+func (g Guard) checkMount(f archiveMountInfo) error {
+	if f.UUID != g.UUID || !supportedArchiveFS(f.FSType) || filepath.Clean(f.Target) != filepath.Clean(g.Root) || !mountOptionsInclude(f.Options, "rw") || mountOptionsInclude(f.Options, "ro") {
+		return errors.New("UUID, файловая система или режим диска не соответствует настройкам")
+	}
+	return nil
+}
+
 func (g Guard) Check() error {
 	if g.Development {
 		fi, e := os.Stat(g.Root)
@@ -55,7 +96,7 @@ func (g Guard) Check() error {
 		return nil
 	}
 	if runtime.GOOS != "linux" || g.UUID == "" {
-		return errors.New("диск не выбран: требуется Linux и UUID ext4")
+		return errors.New("диск не выбран: требуется Linux и UUID раздела ext4 или exFAT")
 	}
 	if !diskUUIDPattern.MatchString(g.UUID) {
 		return errors.New("неверный UUID диска")
@@ -67,22 +108,9 @@ func (g Guard) Check() error {
 	if e != nil || resolved != filepath.Clean(g.Root) {
 		return errors.New("точка монтирования недоступна или является ссылкой")
 	}
-	b, e := exec.Command("findmnt", "--json", "--mountpoint", g.Root, "--output", "TARGET,UUID,FSTYPE,OPTIONS").Output()
+	f, e := archiveMount(g.Root)
 	if e != nil {
-		return errors.New("диск отключён")
-	}
-	var v struct {
-		Filesystems []struct{ Target, UUID, FSType, Options string }
-	}
-	if e = json.Unmarshal(b, &v); e != nil {
 		return e
 	}
-	if len(v.Filesystems) != 1 {
-		return errors.New("диск не смонтирован")
-	}
-	f := v.Filesystems[0]
-	if f.UUID != g.UUID || f.FSType != "ext4" || filepath.Clean(f.Target) != filepath.Clean(g.Root) || !strings.Contains(","+f.Options+",", ",rw,") {
-		return errors.New("UUID, файловая система или режим диска не соответствует настройкам")
-	}
-	return nil
+	return g.checkMount(f)
 }

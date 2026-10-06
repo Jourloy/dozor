@@ -19,19 +19,17 @@ import (
 	"time"
 )
 
-func MountDisk(uuid string) error {
-	if os.Geteuid() != 0 || runtime.GOOS != "linux" || !diskUUIDPattern.MatchString(uuid) {
-		return errors.New("requires root, Linux and ext4 UUID")
-	}
-	disks, e := Disks()
-	if e != nil {
-		return e
+func archiveDisk(disks []Disk, uuid string) (*Disk, error) {
+	if !diskUUIDPattern.MatchString(uuid) {
+		return nil, errors.New("invalid archive UUID")
 	}
 	var found *Disk
+	matches := 0
 	var walk func([]Disk)
 	walk = func(v []Disk) {
 		for _, d := range v {
 			if d.UUID == uuid {
+				matches++
 				x := d
 				found = &x
 			}
@@ -39,22 +37,76 @@ func MountDisk(uuid string) error {
 		}
 	}
 	walk(disks)
-	if found == nil || found.FSType != "ext4" {
-		return errors.New("ext4 partition not found")
+	if matches > 1 {
+		return nil, errors.New("multiple devices have the selected UUID")
+	}
+	if found == nil || !supportedArchiveFS(found.FSType) {
+		return nil, errors.New("ext4 or exFAT partition not found")
 	}
 	for _, m := range found.Mountpoints {
 		if m != nil && *m != "" && *m != "/srv/dozor" {
-			return errors.New("partition already mounted elsewhere")
+			return nil, errors.New("partition already mounted elsewhere")
 		}
 	}
+	return found, nil
+}
+
+func archiveMountOptions(fsType string, uid, gid int) string {
+	options := "rw,nosuid,nodev,noexec"
+	if fsType == "exfat" {
+		// exFAT stores no Unix ownership or permissions; apply them to the whole volume.
+		options += fmt.Sprintf(",uid=%d,gid=%d,fmask=0177,dmask=0077", uid, gid)
+	}
+	return options
+}
+
+func archiveMountUnit(d Disk, uid, gid int) (string, error) {
+	if !diskUUIDPattern.MatchString(d.UUID) || !supportedArchiveFS(d.FSType) || uid < 0 || gid < 0 {
+		return "", errors.New("invalid archive mount parameters")
+	}
+	return "[Unit]\nDescription=Dozor archive disk\n\n[Mount]\nWhat=/dev/disk/by-uuid/" + d.UUID + "\nWhere=/srv/dozor\nType=" + d.FSType + "\nOptions=" + archiveMountOptions(d.FSType, uid, gid) + "\nTimeoutSec=20\n\n[Install]\nWantedBy=multi-user.target\n", nil
+}
+
+func MountDisk(uuid string) error {
+	if os.Geteuid() != 0 || runtime.GOOS != "linux" || !diskUUIDPattern.MatchString(uuid) {
+		return errors.New("requires root, Linux and an ext4 or exFAT UUID")
+	}
+	disks, e := Disks()
+	if e != nil {
+		return e
+	}
+	found, e := archiveDisk(disks, uuid)
+	if e != nil {
+		return e
+	}
+	account, e := user.Lookup("dozor")
+	if e != nil {
+		return e
+	}
+	uid, e := strconv.Atoi(account.Uid)
+	if e != nil {
+		return e
+	}
+	gid, e := strconv.Atoi(account.Gid)
+	if e != nil {
+		return e
+	}
+	unit, e := archiveMountUnit(*found, uid, gid)
+	if e != nil {
+		return e
+	}
 	// Never replace an already mounted archive with another device while recording.
-	if out, e := exec.Command("findmnt", "-n", "-M", "/srv/dozor", "-o", "UUID").Output(); e == nil && strings.TrimSpace(string(out)) != uuid {
-		return errors.New("unmount current archive before replacing it")
+	if current, e := archiveMount("/srv/dozor"); e == nil {
+		if current.UUID != uuid {
+			return errors.New("unmount current archive before replacing it")
+		}
+		if found.FSType == "exfat" && !mountOptionsInclude(current.Options, archiveMountOptions(found.FSType, uid, gid)) {
+			return errors.New("unmount current exFAT archive before changing its mount permissions")
+		}
 	}
 	if e = os.MkdirAll("/srv/dozor", 0555); e != nil {
 		return e
 	}
-	unit := "[Unit]\nDescription=Dozor archive disk\n\n[Mount]\nWhat=/dev/disk/by-uuid/" + uuid + "\nWhere=/srv/dozor\nType=ext4\nOptions=rw,nosuid,nodev,noexec\nTimeoutSec=20\n\n[Install]\nWantedBy=multi-user.target\n"
 	if e = AtomicWrite("/etc/systemd/system/srv-dozor.mount", []byte(unit), 0644); e != nil {
 		return e
 	}
@@ -74,12 +126,16 @@ func MountDisk(uuid string) error {
 	if e = (Guard{Root: "/srv/dozor", UUID: uuid}).Check(); e != nil {
 		return e
 	}
-	account, e := user.Lookup("dozor")
-	if e != nil {
-		return e
+	if found.FSType == "exfat" {
+		current, e := archiveMount("/srv/dozor")
+		if e != nil {
+			return e
+		}
+		if !mountOptionsInclude(current.Options, archiveMountOptions(found.FSType, uid, gid)) {
+			return errors.New("exFAT archive mount permissions do not match the dozor account")
+		}
+		return nil
 	}
-	uid, _ := strconv.Atoi(account.Uid)
-	gid, _ := strconv.Atoi(account.Gid)
 	if e = os.Chown("/srv/dozor", uid, gid); e != nil {
 		return e
 	}

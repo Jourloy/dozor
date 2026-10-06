@@ -13,7 +13,7 @@
 | `engine.go` | состояния движения, окна событий, части, завершение |
 | `store.go` | SQLite, файлы-описания, сверка, буфер и очистка |
 | `upload.go` | S3 SDK, лимит скорости, durable queue, контрольные суммы |
-| `disk.go`, `system.go` | UUID/ext4 guard и привилегированные системные операции |
+| `disk.go`, `system.go` | UUID/ext4/exFAT guard и привилегированные системные операции |
 | `update.go` | проверка подписи, распаковка, переключение и rollback journal |
 | `web/` | встроенный интерфейс: HTML, CSS, классические `app.js` и `live.js`, локальные hls.js, шрифты и иконки; без CDN и сборки. Решения — в [ui.md](ui.md) |
 
@@ -56,7 +56,7 @@ JSON, UTF-8; ошибки имеют `{"error":"..."}`. Для доступа н
 | `GET /events/{id}` | `{event, parts}` с удалёнными/потерянными частями |
 | `GET /parts/{id}/video` | локальная MP4-часть; Range/HEAD; `?download=1` |
 | `GET /disks` | дерево lsblk, текущий UUID, признак development |
-| `POST /disks/select` | `{uuid}` → systemd helper; только существующий ext4 |
+| `POST /disks/select` | `{uuid}` → systemd helper; только существующий ext4 или exFAT |
 
 Пример Camera (пароль передаётся отдельно от URL):
 

@@ -6,6 +6,7 @@ build:
 
 test:
 	go test -race ./...
+	node --test ops/50-dozor_test.cjs
 	node --test internal/dozor/live_player_test.cjs
 
 check:

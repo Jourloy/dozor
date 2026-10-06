@@ -1453,7 +1453,7 @@
       meta.append(el('span', {text: bytes(Number(disk.size))}), el('span', {text: disk.fstype || t('без файловой системы')}), disk.uuid ? el('code', {text: disk.uuid}) : el('span', {text: 'нет UUID'}), el('span', {text: disk.fsavail == null ? t('свободное место — после монтирования') : 'свободно ' + bytes(Number(disk.fsavail))}));
       const row = el('div', {class: 'ui-item disk-row'}, el('div', {class: 'ui-item-content'}, el('p', {class: 'ui-item-title', text: disk.model || disk.name}), meta));
       row.style.setProperty('--depth', String(depth));
-      if (disk.uuid && disk.fstype === 'ext4') {
+      if (disk.uuid && ['ext4', 'exfat'].includes(disk.fstype)) {
         const chosen = disk.uuid === selected;
         if (chosen) {
           // The state in use is a status (a word), not a disabled button: a disabled label would fall below 4.5:1.
@@ -1464,7 +1464,7 @@
             confirmAction(
               {
                 title: t('Использовать этот раздел для архива?'),
-                description: t('Выбранный ext4-раздел станет хранилищем записей Dozor. Файлы на нём не форматируются.'),
+                description: t('Выбранный раздел станет хранилищем записей Dozor. Файлы на нём не форматируются.'),
                 confirmLabel: 'Использовать',
                 action: async () => {
                   await api('/disks/select', 'POST', {uuid: disk.uuid});

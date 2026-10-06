@@ -1,7 +1,7 @@
 polkit.addRule(function(action, subject) {
     if (subject.user === "dozor" && action.id === "org.freedesktop.systemd1.manage-units" &&
         action.lookup("verb") === "start" &&
-        /^dozor-disk-prepare@[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\.service$/.test(action.lookup("unit"))) {
+        /^dozor-disk-prepare@([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}|[a-fA-F0-9]{4}-[a-fA-F0-9]{4})\.service$/.test(action.lookup("unit"))) {
         return polkit.Result.YES;
     }
 });
