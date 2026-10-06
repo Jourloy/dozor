@@ -521,6 +521,7 @@
   );
 
   // ------------------------------------------------------------------ router (hash: #overview, #live, #events, #cameras, #settings)
+  // The menu (below) reads the same hash and marks the current item itself.
   function route() {
     let tab = location.hash.slice(1);
     if (!TABS.includes(tab)) {
@@ -533,10 +534,6 @@
     const changed = tab !== currentTab;
     currentTab = tab;
     for (const name of TABS) $('#tab-' + name).hidden = name !== tab;
-    for (const link of $$('.ui-nav-link')) {
-      if (link.dataset.tab === tab) link.setAttribute('aria-current', 'page');
-      else link.removeAttribute('aria-current');
-    }
     setText($('#page-title'), TITLES[tab]);
     document.title = TITLES[tab].replace(/ /g, ' ') + ' — Dozor';
     $('#storage-alert-action').hidden = tab === 'settings';
@@ -587,17 +584,39 @@
     event.preventDefault();
     $('#main').focus();
   });
-  for (const button of $$('[data-logout]')) {
-    button.addEventListener(
-      'click',
-      run(
-        async () => {
-          await api('/logout', 'POST', {});
-          showLogin();
-        },
-        {button}
-      )
-    );
+  // One handler for every logout button: the top bar's and the menu's (the busy button is the one clicked).
+  const logout = run(async () => {
+    await api('/logout', 'POST', {});
+    showLogin();
+  });
+  for (const button of $$('[data-logout]')) button.addEventListener('click', logout);
+
+  // ------------------------------------------------------------------ menu: the shared Sidebar of @jourloy/00 (vendor/a00-menu.js)
+  // Left rail from 1024px, bottom bar below it. It marks the current item from the hash and follows hashchange itself;
+  // the routing above stays here. The bundle is built by `make menu` (assets-src/menu), see docs/ui.md.
+  // Every text of the Sidebar is passed from here, so that a change of its defaults upstream cannot alter the Russian text.
+  const NAV_LABELS = {overview: 'Обзор', live: 'Онлайн', events: 'События', cameras: 'Камеры', settings: 'Настройки'};
+  const MENU_LABELS = {
+    collapse: 'Свернуть меню',
+    pin: 'Закрепить меню',
+    navigation: 'Разделы',
+    brandTitle: 'Dozor',
+    brandSigil: 'D',
+    brandAriaLabel: 'Dozor',
+  };
+  // The app must work without the menu (a failed or blocked /vendor/a00-menu.js): then the top bar stays on wide screens
+  // too, and its logout button is the way out (data-menu="missing", app.css).
+  let menu = null;
+  try {
+    menu = window.DozorMenu.mount($('#menu'), {
+      items: TABS.map(tab => ({hash: '#' + tab, label: NAV_LABELS[tab], icon: tab})),
+      labels: MENU_LABELS,
+      logoutLabel: 'Выйти',
+      onLogout: logout,
+    });
+  } catch (error) {
+    console.error('Dozor: the menu did not start, vendor/a00-menu.js is missing or broken', error);
+    $('#shell').dataset.menu = 'missing';
   }
 
   // ------------------------------------------------------------------ overview
@@ -647,8 +666,7 @@
     setText($('#today'), longDateFormat.format(now));
     $('#today').setAttribute('datetime', isoDateFormat.format(now));
     renderConnection();
-    const version = s.version ? t('Dozor ' + s.version) : 'Dozor';
-    setText($('#version'), version);
+    if (menu) menu.update({version: s.version || ''});
     setText($('#version-line'), s.version ? t('Версия Dozor ' + s.version) : 'Версия Dozor');
 
     // alerts

@@ -1,0 +1,23 @@
+{
+  "name": "dozor-menu",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Builds the shared @jourloy/00 Sidebar into internal/dozor/web/vendor/a00-menu.{js,css}. Build-time only: the outputs are committed.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.0",
+    "clsx": "2.1.1",
+    "esbuild": "0.28.2",
+    "lucide-react": "1.16.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "tailwind-merge": "3.6.0",
+    "tailwindcss": "4.3.0"
+  }
+}

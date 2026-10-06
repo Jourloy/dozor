@@ -32,7 +32,7 @@ flowchart LR
 
 ## Быстрый запуск для разработки
 
-Нужны Go 1.26.1+, компилятор C для SQLite, FFmpeg/ffprobe и MediaMTX 1.21.1. Node.js 18+ нужен для проверок клиентского JS (`make check`, `make test`); на Raspberry и при обычном запуске он не нужен. Положите видеобинарники в `bin/` рядом с Dozor либо добавьте их в PATH.
+Нужны Go 1.26.1+, компилятор C для SQLite, FFmpeg/ffprobe и MediaMTX 1.21.1. Node.js 18+ нужен для проверок клиентского JS (`make check`, `make test`); на Raspberry и при обычном запуске он не нужен. Пересборка меню из `@jourloy/00` (`make menu`) требует Node.js 20.9+ и checkout monorepo-frontend рядом с репозиторием. Положите видеобинарники в `bin/` рядом с Dozor либо добавьте их в PATH.
 
 ```sh
 make build

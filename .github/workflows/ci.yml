@@ -16,6 +16,7 @@ jobs:
       - run: test -z "$(gofmt -l cmd internal)"
       - run: node --check internal/dozor/web/app.js
       - run: node --check internal/dozor/web/live.js
+      - run: node --check internal/dozor/web/vendor/a00-menu.js
       - run: node --test internal/dozor/live_player_test.cjs
       - run: bash -n scripts/install.sh scripts/build-release.sh
       - run: python3 -m py_compile scripts/collect-licenses.py scripts/soak.py

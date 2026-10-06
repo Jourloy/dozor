@@ -134,13 +134,18 @@
   --a00-ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
   --a00-duration-ui: 320ms;
 
-  /* navigation panel (desktop rail and bottom bar): darker than the ground, light focus ring; 00.md section 10.4 */
-  --a00-nav-surface: #0b0c0b;
-  --a00-nav-border: #232523;
-  --a00-nav-text: var(--a00-ink);
-  --a00-nav-muted: var(--a00-muted);
-  --a00-nav-active: var(--a00-soft);
-  --a00-nav-focus: var(--a00-accent);
+  /* navigation panel (desktop rail and bottom bar): darker than the ground, light focus ring; 00.md section 10.4.
+     These are the public inputs of SidebarDarkTheme (packages/00), which draws the menu (vendor/a00-menu.js); the skin
+     derives its internal tokens from them, so nothing else is defined here. */
+  --a00-sidebar-surface: #0b0c0b;
+  --a00-sidebar-raised: var(--a00-surface); /* hover plate: quieter than the plate of the current item */
+  --a00-sidebar-text: var(--a00-ink);
+  --a00-sidebar-muted: var(--a00-muted);
+  --a00-sidebar-border: #232523;
+  --a00-sidebar-control-border: var(--a00-control-border);
+  --a00-sidebar-accent: var(--a00-soft); /* plate of the current item */
+  --a00-sidebar-on-accent: var(--a00-ink);
+  --a00-sidebar-focus: var(--a00-accent);
 }
 
 /* The overlay of a native <dialog> is painted on ::backdrop; make sure it sees the token even where ::backdrop does not inherit. */

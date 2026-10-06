@@ -8,3 +8,5 @@
 coverage.out
 __pycache__/
 *.pyc
+/assets-src/menu/node_modules/
+/assets-src/menu/.build/

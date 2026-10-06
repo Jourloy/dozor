@@ -1,0 +1,108 @@
+/*
+ * Host adjustments of the shared Sidebar (SidebarShell used as a menu only, the page content is not its child).
+ * Unlayered on purpose: SidebarDarkTheme is unlayered and the Tailwind utilities of the Sidebar sit in layers,
+ * so these rules beat both without raising specificity. All names are prefixed with .dozor-menu.
+ */
+
+/* The shell root is a full-height flex page frame by default; here it is a plain wrapper of two fixed layers. */
+.dozor-menu {
+  display: block;
+  min-height: 0;
+  background: none;
+  color: inherit;
+}
+/* The Sidebar markup expects the Tailwind reset (preflight), which the page does not load: links are not underlined. */
+.dozor-menu a {
+  text-decoration: none;
+}
+/* The empty content slot of the shell, and the utilities strip above the bottom bar (the top bar has Logout). */
+.dozor-menu__hidden {
+  display: none;
+}
+
+/* Desktop rail. The Sidebar shows it with Tailwind's `lg:flex`, which is min-width: 64rem and so follows the user's
+   font size, while the bottom bar of the theme, the top bar and the page switch at 1024px. Here the visibility is
+   owned in px, so exactly one of rail and bottom bar is shown at any font size.
+   From 1024px the rail is fixed to the viewport: hover and focus expand it over the page instead of pushing the
+   content, and the page keeps room for the collapsed rail (app.css). On a short viewport it scrolls inside. */
+.dozor-menu .sidebar-dock {
+  display: none;
+}
+@media (min-width: 1024px) {
+  .dozor-menu .sidebar-dock {
+    display: flex;
+    position: fixed;
+    inset: 1rem auto auto 1rem;
+    margin: 0;
+    height: calc(100dvh - 2rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+/* Tailwind v4 moves hovered items with the `translate` property, which the theme's `transform: none` does not cancel. */
+.dozor-menu .sidebar-dock :is(a, [aria-disabled="true"]) {
+  translate: none;
+}
+.dozor-menu .sidebar-dock__toggle {
+  cursor: pointer;
+}
+
+/* The version under the brand name: the product's own caption style, not the dock's uppercase mono. */
+.dozor-menu__version {
+  font: 400 13px/1.5 var(--a00-font-ui);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+/* Logout in the footer: a utility button of the dark skin, same label animation as the rail items. */
+.dozor-menu__logout {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  overflow: hidden;
+  border-style: solid;
+  border-width: 1px;
+  font: 500 14px/1.4 var(--a00-font-ui);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dozor-menu__logout .ui-icon {
+  width: 16px;
+  height: 16px;
+}
+.dozor-menu__logout-label {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition:
+    max-width 220ms ease-out,
+    opacity 220ms ease-out;
+}
+.dozor-menu .sidebar-dock[data-expanded="false"] .dozor-menu__logout {
+  justify-content: center;
+  padding-inline: 0;
+}
+.dozor-menu .sidebar-dock[data-expanded="false"] .dozor-menu__logout-label {
+  max-width: 0;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dozor-menu__logout-label {
+    transition: none;
+  }
+}
+
+/* Small phones: all five labels must fit; "Настройки" is the widest, 58px at the 11px of the bar. */
+@media (max-width: 374px) {
+  .dozor-menu .sidebar-mobile-nav {
+    inset-inline: 0.25rem;
+    gap: 0;
+    padding-inline: 0.125rem;
+  }
+}

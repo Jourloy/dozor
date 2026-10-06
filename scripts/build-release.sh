@@ -35,6 +35,7 @@ cp "$(go env GOROOT)/LICENSE" "$package_dir/LICENSES/Go.txt"
 python3 scripts/collect-licenses.py "$package_dir/LICENSES"
 cp internal/dozor/web/vendor/hls-LICENSE.txt "$package_dir/LICENSES/hls.js.txt"
 cp internal/dozor/web/vendor/Apache-2.0.txt "$package_dir/LICENSES/hls.js-Apache-2.0.txt"
+cp internal/dozor/web/vendor/a00-menu-LICENSES.txt "$package_dir/LICENSES/a00-menu.txt"
 tar -czf "dist/dozor_${release_version}_linux_arm64.tar.gz" -C "$package_dir" VERSION bin LICENSES
 cp "$build_root/ffmpeg.tar.xz" dist/ffmpeg-8.0.1.tar.xz
 echo "Created dist/dozor_${release_version}_linux_arm64.tar.gz"

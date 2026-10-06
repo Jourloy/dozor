@@ -10,8 +10,10 @@
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/components.css">
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/vendor/a00-menu.css">
 <script src="/vendor/hls-1.7.3.min.js" defer></script>
 <script src="/live.js" defer></script>
+<script src="/vendor/a00-menu.js" defer></script>
 <script src="/app.js" defer></script>
 </head>
 <body>
@@ -103,20 +105,8 @@
     <button type="button" class="ui-button" data-variant="ghost" data-size="icon" data-logout aria-label="Выйти"><svg class="ui-icon" aria-hidden="true"><use href="#i-logout"/></svg></button>
   </header>
 
-  <nav class="ui-nav" aria-label="Разделы">
-    <a class="ui-nav-brand" href="#overview">Dozor</a>
-    <ul class="ui-nav-list">
-      <li><a class="ui-nav-link" href="#overview" data-tab="overview"><svg class="ui-icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Обзор</span></a></li>
-      <li><a class="ui-nav-link" href="#live" data-tab="live"><svg class="ui-icon" aria-hidden="true"><use href="#i-live"/></svg><span>Онлайн</span></a></li>
-      <li><a class="ui-nav-link" href="#events" data-tab="events"><svg class="ui-icon" aria-hidden="true"><use href="#i-events"/></svg><span>События</span></a></li>
-      <li><a class="ui-nav-link" href="#cameras" data-tab="cameras"><svg class="ui-icon" aria-hidden="true"><use href="#i-cameras"/></svg><span>Камеры</span></a></li>
-      <li><a class="ui-nav-link" href="#settings" data-tab="settings"><svg class="ui-icon" aria-hidden="true"><use href="#i-settings"/></svg><span>Настройки</span></a></li>
-    </ul>
-    <div class="ui-nav-footer">
-      <p class="ui-nav-version" id="version">Dozor</p>
-      <button type="button" class="ui-button" data-variant="ghost" data-logout><svg class="ui-icon" data-icon="inline-start" aria-hidden="true"><use href="#i-logout"/></svg>Выйти</button>
-    </div>
-  </nav>
+  <!-- Navigation: the shared Sidebar of @jourloy/00, rendered here by vendor/a00-menu.js (DozorMenu.mount in app.js). -->
+  <div id="menu"></div>
 
   <main class="app-main" id="main" tabindex="-1">
     <header class="page-header">

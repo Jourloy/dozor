@@ -13,14 +13,17 @@
       --shell-gutter: 20px;
     }
   }
-  /* Toasts sit above the bottom navigation bar (00.md section 10.6, --a00-toast-bottom). */
+  /* Toasts sit above the bottom navigation bar (00.md section 10.6, --a00-toast-bottom). The bar is the one of the shared
+     menu (SidebarMobileNav): 12px off the bottom edge plus 69px of height, and a 15px gap above it. */
   @media (max-width: 1023px) {
     :root {
-      --a00-toast-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+      --a00-toast-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
     }
-    /* The sticky top bar must not cover what is scrolled or focused into view (00.md section 15). */
+    /* The sticky top bar must not cover what is scrolled or focused into view (00.md section 15); nor must the bottom bar
+       of the menu (top edge: 81px plus the safe-area inset, with a gap). */
     html {
       scroll-padding-block-start: calc(var(--topbar-height) + 24px);
+      scroll-padding-block-end: calc(96px + env(safe-area-inset-bottom, 0px));
     }
   }
 
@@ -122,11 +125,17 @@
     padding: 24px var(--shell-gutter) calc(112px + env(safe-area-inset-bottom, 0px));
     outline: none;
   }
+  /* The menu is a fixed rail (vendor/a00-menu.js): 4.75rem wide, 1rem off the edge. Hover and focus expand it over the
+     page; only the pinned rail (16.5rem) makes room. data-dock-pinned is set by SidebarShell on its root.
+     Without the menu (data-menu="missing", set by app.js) there is no rail: the top bar stays, it has the logout. */
   @media (min-width: 1024px) {
-    .app {
-      padding-inline-start: 16rem;
+    .app:not([data-menu="missing"]) {
+      padding-inline-start: 5.75rem;
     }
-    .app-topbar {
+    .app:has([data-dock-pinned="true"]) {
+      padding-inline-start: 17.5rem;
+    }
+    .app:not([data-menu="missing"]) .app-topbar {
       display: none;
     }
     .app-main {
@@ -286,24 +295,12 @@
   }
 
   /* ---------- Events ---------- */
-  /* Keep the current picture readable on wide screens and all five nav labels on small phones. */
+  /* Keep the current picture readable on wide screens. */
   .live-frame {
     max-height: 70dvh;
   }
   .camera-card .ui-card-footer {
     flex-wrap: wrap;
-  }
-  @media (max-width: 374px) {
-    .ui-nav {
-      padding-inline: 2px;
-    }
-    .ui-nav-list {
-      gap: 0;
-    }
-    .ui-nav-link {
-      padding-inline: 1px;
-      font-size: 11px;
-    }
   }
   .filter-bar {
     display: flex;
