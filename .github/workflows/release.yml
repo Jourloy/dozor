@@ -11,6 +11,10 @@ jobs:
     steps:
       - run: apt-get update && apt-get install -y ca-certificates curl git build-essential pkg-config xz-utils python3
       - uses: actions/checkout@v4
+      - name: Trust the release checkout inside the container
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git status --short
       - name: Verify release tag matches project version
         run: bash scripts/version.sh "$GITHUB_REF_NAME"
       - uses: actions/setup-go@v5
