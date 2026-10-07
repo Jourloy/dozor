@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -99,14 +100,31 @@ func TargetFingerprint(c S3Config) string {
 	return hex.EncodeToString(h[:])
 }
 func (s *Store) SetTarget(c S3Config) error {
+	if err := s.Guard.Check(); err != nil {
+		return err
+	}
 	fingerprint := TargetFingerprint(c)
 	var prev string
 	err := s.DB.QueryRow("SELECT value FROM metadata WHERE key='s3_target'").Scan(&prev)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	// Keep the destination beside the durable part sidecars. Rebuilding the
+	// SQLite catalogue must not reset acknowledgements for the same bucket.
+	targetFile := filepath.Join(s.Root, "s3-target")
+	if errors.Is(err, sql.ErrNoRows) {
+		data, readErr := os.ReadFile(targetFile)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return readErr
+		}
+		prev = string(data)
+	}
 	if prev == fingerprint {
-		return nil
+		if err = AtomicWrite(targetFile, []byte(fingerprint), 0600); err != nil {
+			return err
+		}
+		_, err = s.DB.Exec("INSERT OR REPLACE INTO metadata VALUES('s3_target',?)", fingerprint)
+		return err
 	}
 	evs, e := s.Events("", 1000000)
 	if e != nil {
@@ -142,9 +160,18 @@ func (s *Store) SetTarget(c S3Config) error {
 			}
 		}
 	}
+	if e = AtomicWrite(targetFile, []byte(fingerprint), 0600); e != nil {
+		return e
+	}
 	_, e = s.DB.Exec("INSERT OR REPLACE INTO metadata VALUES('s3_target',?)", fingerprint)
 	return e
 }
+
+type manifestReceipt struct {
+	Target string `json:"target"`
+	SHA256 string `json:"sha256"`
+}
+
 func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (bool, error) {
 	j, e := s.NextJob(time.Now())
 	if errors.Is(e, sql.ErrNoRows) {
@@ -164,7 +191,7 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 		if err != nil {
 			return false, err
 		}
-		if p.Deleted {
+		if p.Deleted || p.Uploaded {
 			return true, s.DoneJob(j.ID)
 		}
 		rel = p.Path
@@ -182,6 +209,9 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 		s.mutate.Unlock()
 		if err != nil {
 			return false, err
+		}
+		if ev.Uploaded {
+			return true, s.DoneJob(j.ID)
 		}
 		if ev.Status != "closed" {
 			return false, s.Retry(j, "событие ещё открыто")
@@ -211,9 +241,38 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 		}
 	}
 	key := path.Join(c.Prefix, filepath.ToSlash(rel))
-	if e = remote.Put(ctx, key, filepath.Join(s.Root, rel), sha, md, size); e != nil {
-		_ = s.Retry(j, "S3 недоступен или отказал в доступе; повтор запланирован")
-		return false, e
+	// Event.Uploaded is false when any part was lost, even after its manifest
+	// was acknowledged. A separate receipt stops recovery from republishing an
+	// unchanged manifest after backend retention has removed it from S3.
+	receiptFile := filepath.Join(s.Root, eventDir(uploadedEvent), "manifest.receipt")
+	receipt := manifestReceipt{Target: TargetFingerprint(c), SHA256: sha}
+	acknowledged := false
+	if j.Kind == "event" {
+		data, err := os.ReadFile(receiptFile)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		if err == nil {
+			var previous manifestReceipt
+			if err = json.Unmarshal(data, &previous); err != nil {
+				return false, err
+			}
+			acknowledged = previous == receipt
+		}
+	}
+	if !acknowledged {
+		if e = remote.Put(ctx, key, filepath.Join(s.Root, rel), sha, md, size); e != nil {
+			_ = s.Retry(j, "S3 недоступен или отказал в доступе; повтор запланирован")
+			return false, e
+		}
+		if j.Kind == "event" {
+			if e = s.Guard.Check(); e != nil {
+				return false, e
+			}
+			if e = WriteJSON(receiptFile, receipt); e != nil {
+				return false, e
+			}
+		}
 	}
 	s.mutate.Lock()
 	defer s.mutate.Unlock()
