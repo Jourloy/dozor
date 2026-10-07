@@ -30,8 +30,10 @@ function assertLabels(labels: Partial<SidebarLabels> | undefined) {
 type MenuOptions = {
   /** The first item is the home item: the brand link goes there too, and it is the fallback of an unknown hash. */
   items: MenuItem[];
-  /** navigation is the aria-label of the landmark; brandTitle and brandSigil draw the brand next to the version. */
+  /** navigation is the aria-label of the landmark; brandTitle names the brand next to the version. */
   labels: SidebarLabels;
+  /** The product logo, served by the host alongside the rest of the embedded web assets. */
+  logoSrc: string;
   /** Text under the brand name in the expanded rail. */
   version?: string;
   logoutLabel: string;
@@ -74,7 +76,7 @@ const subscribeHash = (onChange: () => void) => {
 };
 const readHash = () => window.location.hash;
 
-function Menu({items, labels, version, logoutLabel, onLogout}: MenuOptions) {
+function Menu({items, labels, logoSrc, version, logoutLabel, onLogout}: MenuOptions) {
   const hash = useSyncExternalStore(subscribeHash, readHash, readHash);
   // The router falls back to the first screen for an unknown hash and rewrites it without a hashchange event.
   const pathname = items.some(item => item.hash === hash) ? hash : items[0].hash;
@@ -115,7 +117,7 @@ function Menu({items, labels, version, logoutLabel, onLogout}: MenuOptions) {
       homeItemInNav
       brand={{
         title: labels.brandTitle,
-        sigil: labels.brandSigil,
+        sigil: <img className="dozor-menu__logo" src={logoSrc} alt="" width={40} height={40} decoding="async" />,
         ariaLabel: labels.brandAriaLabel,
         subtitle: version,
         href: homeItem.href,
@@ -135,6 +137,7 @@ function Menu({items, labels, version, logoutLabel, onLogout}: MenuOptions) {
         ...darkSidebarShellClassNames,
         dock: {
           ...darkSidebarShellClassNames.dock,
+          sigil: `${darkSidebarShellClassNames.dock?.sigil ?? ""} dozor-menu__sigil`,
           brandSubtitle: `${darkSidebarShellClassNames.dock?.brandSubtitle ?? ""} dozor-menu__version`,
         },
         mobileNav: {

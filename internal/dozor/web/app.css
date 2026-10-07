@@ -109,12 +109,20 @@
   .app-brand {
     display: inline-flex;
     align-items: center;
+    gap: 8px;
     min-height: 44px;
     border-radius: var(--a00-radius-xs);
     color: var(--a00-ink);
     font: 600 22px/1.2 var(--a00-font-ui);
     letter-spacing: -0.02em;
     text-decoration: none;
+  }
+  .app-logo {
+    display: block;
+    flex: none;
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
   }
   .app-main {
     box-sizing: border-box;

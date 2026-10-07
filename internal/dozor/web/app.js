@@ -626,6 +626,7 @@
     menu = window.DozorMenu.mount($('#menu'), {
       items: TABS.map(tab => ({hash: '#' + tab, label: NAV_LABELS[tab], icon: tab})),
       labels: MENU_LABELS,
+      logoSrc: '/logo.png',
       logoutLabel: 'Выйти',
       onLogout: logout,
     });

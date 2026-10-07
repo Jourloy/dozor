@@ -48,6 +48,17 @@
   cursor: pointer;
 }
 
+/* The supplied logo keeps its own colours and transparency, without the theme's letter tile. */
+.dozor-menu__sigil {
+  background: none;
+}
+.dozor-menu__logo {
+  display: block;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
 /* The version under the brand name: the product's own caption style, not the dock's uppercase mono. */
 .dozor-menu__version {
   font: 400 13px/1.5 var(--a00-font-ui);
