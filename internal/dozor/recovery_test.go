@@ -149,8 +149,11 @@ func TestSensitivityReloadStartsDespiteUnfinishedVideo(t *testing.T) {
 	}
 	actual, err := app.runtime.Store.Event(ev.ID)
 	must(t, err)
-	if actual.Cursor != ev.Cursor || !app.runtime.Store.HasSegment(seg.Path) {
-		t.Fatal("startup discarded the unfinished recording", actual)
+	if actual.Status != "closed" || !actual.Incomplete || actual.AssemblyFailures != 0 || app.runtime.Store.HasSegment(seg.Path) {
+		t.Fatal("repeated recovery failures did not discard the invalid recording", actual)
+	}
+	if _, err = os.Stat(filepath.Join(app.runtime.Store.Root, seg.Path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid recording remains after repeated recovery: %v", err)
 	}
 	reported := false
 	for _, notice := range app.runtime.Store.Notices() {

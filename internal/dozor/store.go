@@ -12,18 +12,19 @@ import (
 )
 
 type Event struct {
-	ID             string `json:"id"`
-	CameraID       string `json:"camera_id"`
-	Source         string `json:"source"`
-	Start          int64  `json:"start"`
-	End            int64  `json:"end"`
-	Cursor         int64  `json:"cursor"`
-	Status         string `json:"status"`
-	ShortPrebuffer bool   `json:"short_prebuffer"`
-	Incomplete     bool   `json:"incomplete"`
-	Uploaded       bool   `json:"uploaded"`
-	Lost           bool   `json:"lost"`
-	DisconnectedAt int64  `json:"disconnected_at,omitempty"`
+	ID               string `json:"id"`
+	CameraID         string `json:"camera_id"`
+	Source           string `json:"source"`
+	Start            int64  `json:"start"`
+	End              int64  `json:"end"`
+	Cursor           int64  `json:"cursor"`
+	Status           string `json:"status"`
+	ShortPrebuffer   bool   `json:"short_prebuffer"`
+	Incomplete       bool   `json:"incomplete"`
+	Uploaded         bool   `json:"uploaded"`
+	Lost             bool   `json:"lost"`
+	DisconnectedAt   int64  `json:"disconnected_at,omitempty"`
+	AssemblyFailures int    `json:"assembly_failures,omitempty"`
 }
 type Segment struct {
 	Path     string `json:"path"`
@@ -332,18 +333,28 @@ func (s *Store) PruneBuffer(now time.Time) error {
 		return e
 	}
 	for _, p := range paths {
-		if e = s.Guard.Check(); e != nil {
-			return e
-		}
-		if e = os.Remove(filepath.Join(s.Root, p)); e != nil && !errors.Is(e, os.ErrNotExist) {
-			return e
-		}
-		if _, e = s.DB.Exec("DELETE FROM segments WHERE path=?", p); e != nil {
+		if e = s.RemoveSegment(p); e != nil {
 			return e
 		}
 	}
 	return nil
 }
+
+func (s *Store) RemoveSegment(path string) error {
+	if err := s.Guard.Check(); err != nil {
+		return err
+	}
+	full, err := checkedPath(s.Root, path)
+	if err != nil {
+		return err
+	}
+	if err = os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	_, err = s.DB.Exec("DELETE FROM segments WHERE path=?", path)
+	return err
+}
+
 func (s *Store) PruneArchive(usage func() (uint64, uint64, error)) error {
 	s.mutate.Lock()
 	defer s.mutate.Unlock()
@@ -501,6 +512,7 @@ func (s *Store) Recover() error {
 		for _, p := range parts {
 			if p.End > ev.Cursor {
 				ev.Cursor = p.End
+				ev.AssemblyFailures = 0
 			}
 			if p.Lost {
 				ev.Lost = true

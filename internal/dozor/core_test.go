@@ -190,7 +190,7 @@ func TestCrashRecoveryAndManifest(t *testing.T) {
 	g := Guard{Root: root, Development: true}
 	s, e := OpenStore(g)
 	must(t, e)
-	ev := Event{ID: ID(), CameraID: ID(), Start: 100000, End: 200000, Cursor: 100000, Status: "open"}
+	ev := Event{ID: ID(), CameraID: ID(), Start: 100000, End: 200000, Cursor: 100000, Status: "open", AssemblyFailures: 2}
 	must(t, s.SaveEvent(ev))
 	p := fixturePart(t, s, ev, 100000, 160000)
 	must(t, WriteJSON(filepath.Join(root, eventDir(ev), "manifest.json"), map[string]string{"event": "ignored for catalog recovery"}))
@@ -200,7 +200,7 @@ func TestCrashRecoveryAndManifest(t *testing.T) {
 	defer s.Close()
 	actual, e := s.Event(ev.ID)
 	must(t, e)
-	if actual.Cursor != p.End || actual.Status != "closing" || !actual.Incomplete || s.QueueCount() != 1 {
+	if actual.Cursor != p.End || actual.Status != "closing" || !actual.Incomplete || actual.AssemblyFailures != 0 || s.QueueCount() != 1 {
 		t.Fatalf("%+v queue=%d", actual, s.QueueCount())
 	}
 }

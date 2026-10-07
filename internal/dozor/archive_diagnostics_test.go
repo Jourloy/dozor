@@ -100,7 +100,7 @@ func TestArchiveAssemblyRetryResetsAfterProgress(t *testing.T) {
 	engine.assemble = func(_ context.Context, s *Store, _ Binaries, ev Event, segs []Segment) (Part, error) {
 		attempts++
 		if attempts != 3 {
-			return Part{}, errVideoAssembly
+			return Part{}, fmt.Errorf("%w: %w", errVideoAssembly, errNoVideo)
 		}
 		return fixturePart(t, s, ev, segs[0].Start, segs[len(segs)-1].End), nil
 	}
@@ -115,7 +115,7 @@ func TestArchiveAssemblyRetryResetsAfterProgress(t *testing.T) {
 	}
 	actual, err := s.Event(ev.ID)
 	must(t, err)
-	if actual.Cursor != ev.Start+60000 || actual.Status != "closing" {
+	if actual.Cursor != ev.Start+60000 || actual.Status != "closing" || actual.AssemblyFailures != 1 {
 		t.Fatal("completed part progress was not preserved", actual)
 	}
 }

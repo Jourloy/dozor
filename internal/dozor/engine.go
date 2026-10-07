@@ -296,6 +296,34 @@ eventsLoop:
 					if guardErr := e.Store.Guard.Check(); guardErr != nil {
 						return eventError(ev, "проверка диска", guardErr)
 					}
+					failures := 0
+					if invalidVideoData(err) {
+						failures = min(ev.AssemblyFailures+1, invalidVideoAttempts)
+					}
+					if failures != ev.AssemblyFailures {
+						ev.AssemblyFailures = failures
+						if saveErr := e.Store.SaveEvent(ev); saveErr != nil {
+							return eventError(ev, "сохранение ошибок сборки", saveErr)
+						}
+					}
+					if failures >= invalidVideoAttempts {
+						removed, cleanupErr := e.discardInvalidSegments(ctx, &ev, selected)
+						if cleanupErr != nil {
+							return eventError(ev, "удаление повреждённых фрагментов", cleanupErr)
+						}
+						if removed {
+							ev.AssemblyFailures = 0
+							if saveErr := e.Store.SaveEvent(ev); saveErr != nil {
+								return eventError(ev, "сохранение события", saveErr)
+							}
+							delete(e.retries, ev.ID)
+							segs, err = e.Store.Segments(ev.CameraID, ev.Cursor, ev.End)
+							if err != nil {
+								return eventError(ev, "чтение фрагментов", err)
+							}
+							continue
+						}
+					}
 					// Keep this event's cursor and buffer for retry, but let
 					// later events (including this camera's) make progress.
 					retry := e.retries[ev.ID]
@@ -307,6 +335,7 @@ eventsLoop:
 					continue eventsLoop
 				}
 				ev.Cursor = p.End
+				ev.AssemblyFailures = 0
 				if err = e.Store.SaveEvent(ev); err != nil {
 					return eventError(ev, "сохранение события", err)
 				}
@@ -324,6 +353,7 @@ eventsLoop:
 				ev.Incomplete = true
 			}
 			ev.Status = "closed"
+			ev.AssemblyFailures = 0
 			if err = e.markLastPart(ev); err != nil {
 				return eventError(ev, "отметка последней части", err)
 			}

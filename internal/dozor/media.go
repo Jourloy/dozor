@@ -29,6 +29,8 @@ type ProbeResult struct {
 	Duration          float64 `json:"duration"`
 }
 
+var errNoVideo = errors.New("в потоке нет видео")
+
 func Probe(ctx context.Context, bin, input string, rtsp bool) (ProbeResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
@@ -83,7 +85,7 @@ func Probe(ctx context.Context, bin, input string, rtsp bool) (ProbeResult, erro
 	p.Duration, _ = strconv.ParseFloat(v.Format.Duration, 64)
 	p.BrowserCompatible = p.Video == "h264" && (p.Audio == "" || p.Audio == "aac")
 	if p.Video == "" {
-		return p, errors.New("в потоке нет видео")
+		return p, errNoVideo
 	}
 	return p, nil
 }
@@ -311,6 +313,30 @@ func scanSegmentFiles(ctx context.Context, s *Store, probe string, files []strin
 // Video tool failures can be retried without taking a healthy archive offline.
 // Filesystem and catalog errors must still propagate as storage failures.
 var errVideoAssembly = errors.New("не удалось собрать MP4")
+
+// Only input-data failures qualify for deletion. A missing executable, timeout,
+// or storage failure says nothing about whether the recording is usable.
+func invalidVideoData(err error) bool {
+	if errors.Is(err, errNoVideo) {
+		return true
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, detail := range []string{"permission denied", "operation not permitted", "input/output error", "no space left", "read-only file system", "cannot allocate memory", "resource temporarily unavailable"} {
+		if strings.Contains(message, detail) {
+			return false
+		}
+	}
+	for _, detail := range []string{"moov atom not found", "invalid data found", "matches no streams", "does not contain any stream", "no such file or directory"} {
+		if strings.Contains(message, detail) {
+			return true
+		}
+	}
+	return false
+}
 
 func Assemble(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segment) (Part, error) {
 	p := Part{ID: ID(), EventID: ev.ID, CameraID: ev.CameraID, Start: segs[0].Start, End: segs[len(segs)-1].End}
