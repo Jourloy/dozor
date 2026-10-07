@@ -57,13 +57,18 @@ type App struct {
 	attempts                  map[string]loginAttempt
 	setupToken                string
 	updateMu                  sync.Mutex
+	reboots                   *RebootScheduler
 }
 
 func NewApp(c *ConfigFile, b Binaries, dev bool, state, socket, version string) (*App, error) {
 	if e := os.MkdirAll(state, 0700); e != nil {
 		return nil, e
 	}
-	a := &App{Config: c, Bins: b, Development: dev, StateDir: state, Socket: socket, Version: version, reload: make(chan struct{}, 1), sessions: map[string]Session{}, attempts: map[string]loginAttempt{}}
+	reboots, err := loadRebootScheduler(state, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	a := &App{reboots: reboots, Config: c, Bins: b, Development: dev, StateDir: state, Socket: socket, Version: version, reload: make(chan struct{}, 1), sessions: map[string]Session{}, attempts: map[string]loginAttempt{}}
 	if c.Get().PasswordHash == "" {
 		p := filepath.Join(state, "setup-token")
 		token, e := os.ReadFile(p)
@@ -209,6 +214,10 @@ func (a *App) Run(ctx context.Context) error {
 	internal := &http.Server{Handler: a.internalHandler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = internal.Serve(listener) }()
 	defer func() { _ = internal.Close(); _ = os.Remove(a.Socket) }()
+	rebootCtx, stopReboots := context.WithCancel(ctx)
+	rebootsDone := make(chan struct{})
+	go func() { defer close(rebootsDone); a.runRebootScheduler(rebootCtx) }()
+	defer func() { stopReboots(); <-rebootsDone }()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	iteration := 0

@@ -21,6 +21,13 @@ test('policy allows only Dozor to start disk selection and the signed updater', 
   for (const unit of ['ssh.service', 'dozor-disk-prepare@12345678.service', 'dozor-disk-prepare@../12AB-34CD.service', 'dozor-disk-prepare@12AB-34CD.service\n', 'dozor-disk-prepare@12AB-34CD.service.extra']) {
     assert.equal(authorize(unit), undefined, unit);
   }
+  for (const action of ['reboot', 'reboot-multiple-sessions']) {
+    assert.equal(authorize('', 'dozor', '', `org.freedesktop.login1.${action}`), 'yes');
+    assert.equal(authorize('', 'nobody', '', `org.freedesktop.login1.${action}`), undefined);
+  }
+  for (const action of ['power-off', 'reboot-ignore-inhibit', 'suspend']) {
+    assert.equal(authorize('', 'dozor', '', `org.freedesktop.login1.${action}`), undefined);
+  }
   assert.equal(authorize('dozor-update.service'), 'yes');
   assert.equal(authorize('dozor-update.service', 'nobody'), undefined);
   for (const verb of ['stop', 'restart', 'reload']) {
