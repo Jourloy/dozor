@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,9 +117,19 @@ func TestRTSPDisconnect(t *testing.T) {
 		state := r.streams[cam.ID].State
 		root := r.Store.Root
 		h, historyErr := r.Store.Availability(c.Cameras, "", time.Now())
+		connectionError, diagnosticErr := r.Store.LastCameraFailure(cam.ID, "connection")
+		detectorError, detectorErr := r.Store.LastCameraFailure(cam.ID, "detector")
 		a.mu.RUnlock()
 		must(t, err)
 		must(t, historyErr)
+		must(t, diagnosticErr)
+		must(t, detectorErr)
+		if connectionError == nil || connectionError.At < disconnected.UnixMilli() || !strings.HasPrefix(connectionError.Message, "RTSP:") {
+			t.Fatal("disconnect lost its RTSP cause", connectionError)
+		}
+		if detectorError == nil || !strings.Contains(detectorError.Message, "Server returned") {
+			t.Fatal("detector failure lost its separate cause", detectorError)
+		}
 		if len(parts) == 0 || parts[len(parts)-1].DisconnectedAt == 0 || state != "offline" {
 			t.Fatalf("unmarked/discarded tail: %+v %+v %s", ev, parts, state)
 		}

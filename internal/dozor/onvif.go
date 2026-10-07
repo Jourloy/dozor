@@ -174,7 +174,7 @@ func soap(ctx context.Context, c Camera, endpoint, action, body string) (*xmlNod
 		}
 		res, e := client.Do(req)
 		if e != nil {
-			return nil, errors.New("ONVIF camera unavailable")
+			return nil, &cameraToolError{message: "ONVIF camera unavailable: " + cameraDiagnostic(e.Error(), CameraURL(c, false)), cause: e}
 		}
 		b, e := io.ReadAll(io.LimitReader(res.Body, 2<<20))
 		res.Body.Close()
@@ -184,12 +184,12 @@ func soap(ctx context.Context, c Camera, endpoint, action, body string) (*xmlNod
 		if res.StatusCode == 401 && attempt == 0 {
 			auth, e = digestAuth(res.Header.Get("WWW-Authenticate"), "POST", req.URL.RequestURI(), c.Username, c.Password)
 			if e != nil {
-				return nil, e
+				return nil, fmt.Errorf("ONVIF: HTTP 401 Unauthorized: %w", e)
 			}
 			continue
 		}
 		if res.StatusCode != 200 {
-			return nil, errors.New("ONVIF request rejected")
+			return nil, fmt.Errorf("ONVIF: HTTP %d %s", res.StatusCode, http.StatusText(res.StatusCode))
 		}
 		n, e := parseXML(b)
 		if e != nil {

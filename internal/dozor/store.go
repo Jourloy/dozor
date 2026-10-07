@@ -92,6 +92,7 @@ func OpenStore(g Guard) (*Store, error) {
  CREATE TABLE IF NOT EXISTS notices(at INTEGER,message TEXT);
  CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT);
  CREATE TABLE IF NOT EXISTS availability(camera TEXT,start INTEGER,end INTEGER,state TEXT,PRIMARY KEY(camera,start));
+ CREATE TABLE IF NOT EXISTS camera_diagnostics(camera TEXT,kind TEXT,at INTEGER NOT NULL,message TEXT NOT NULL,PRIMARY KEY(camera,kind));
  CREATE INDEX IF NOT EXISTS availability_end ON availability(end);`)
 	if e != nil {
 		db.Close()

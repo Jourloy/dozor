@@ -23,7 +23,7 @@ check:
 	PYTHONPYCACHEPREFIX="$(CURDIR)/.cache/pycache" python3 -m py_compile scripts/collect-licenses.py scripts/soak.py
 
 integration: build
-	DOZOR_INTEGRATION=1 DOZOR_BINARY="$(CURDIR)/bin/dozor" DOZOR_MEDIAMTX="$${DOZOR_MEDIAMTX:-$(CURDIR)/bin/mediamtx}" go test ./internal/dozor -run '^Test(RTSPPipeline|RTSPDisconnect|LiveRTSPStream)$$' -v -count=1 -timeout=5m
+	DOZOR_INTEGRATION=1 DOZOR_BINARY="$(CURDIR)/bin/dozor" DOZOR_MEDIAMTX="$${DOZOR_MEDIAMTX:-$(CURDIR)/bin/mediamtx}" go test ./internal/dozor -run '^Test(RTSPPipeline|RTSPDisconnect|RTSPConnectionDiagnostics|LiveRTSPStream)$$' -v -count=1 -timeout=5m
 
 # Rebuilds the shared Sidebar of @jourloy/00 into the committed bundle internal/dozor/web/vendor/a00-menu.{js,css}.
 # Needs Node 20.9+ and the monorepo-frontend checkout (A00_DIR, default ../monorepo-frontend/packages/00).

@@ -2,6 +2,7 @@ package dozor
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -59,5 +60,28 @@ func TestHTTPDigestReferenceVector(t *testing.T) {
 	}
 	if _, err = digestAuth(`Digest realm="r", nonce="n", qop="auth-int"`, "GET", "/", "u", "p"); err == nil {
 		t.Fatal("unsupported integrity mode accepted")
+	}
+}
+
+func TestONVIFFailureDiagnostics(t *testing.T) {
+	for _, status := range []int{401, 503} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				io.WriteString(w, "private camera response")
+			}))
+			defer server.Close()
+			camera := Camera{ONVIF: server.URL + "/device?token=private-token"}
+			_, err := soap(context.Background(), camera, camera.ONVIF, "test", "")
+			if err == nil || !strings.Contains(err.Error(), http.StatusText(status)) || strings.Contains(err.Error(), "private") {
+				t.Fatal("lost HTTP status or exposed private camera data", err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err = soap(ctx, camera, camera.ONVIF, "test", "")
+			if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "context canceled") || strings.Contains(err.Error(), "private-token") {
+				t.Fatal("lost network failure cause or exposed URL", err)
+			}
+		})
 	}
 }

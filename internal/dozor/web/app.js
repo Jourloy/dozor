@@ -747,8 +747,23 @@
       } else {
         const rows = el('ul', {class: 'ui-item-list', dataset: {divided: ''}});
         for (const c of s.cameras) {
+          const content = el('div', {class: 'ui-item-content'},
+            el('p', {class: 'ui-item-title', text: c.name}),
+            el('p', {class: 'ui-item-description status-time', text: streamText(c)}));
+          if (c.last_connection_error) {
+            const failure = c.last_connection_error;
+            content.append(el('details', {class: 'ui-item-description', open: c.enabled && !c.online},
+              el('summary', {text: 'Последняя ошибка подключения · ' + time(failure.at)}),
+              el('p', {text: failure.message})));
+          }
+          if (c.last_detector_error) {
+            const failure = c.last_detector_error;
+            content.append(el('details', {class: 'ui-item-description', open: c.enabled && !c.detector_healthy},
+              el('summary', {text: 'Последняя ошибка детектора движения · ' + time(failure.at)}),
+              el('p', {text: failure.message})));
+          }
           rows.append(
-            el('li', null, el('div', {class: 'ui-item status-row'}, el('div', {class: 'ui-item-content'}, el('p', {class: 'ui-item-title', text: c.name}), el('p', {class: 'ui-item-description status-time', text: streamText(c)})), el('div', {class: 'ui-item-actions'}, cameraBadge(c), c.enabled ? liveButton(c) : null)))
+            el('li', null, el('div', {class: 'ui-item status-row'}, content, el('div', {class: 'ui-item-actions'}, cameraBadge(c), c.enabled ? liveButton(c) : null)))
           );
         }
         list.append(rows);

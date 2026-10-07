@@ -15,16 +15,18 @@ import (
 )
 
 type Runtime struct {
-	Store         *Store
-	Engine        *Engine
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	segments      chan Segment
-	mediaSince    atomic.Int64
-	streams       map[string]AvailabilityInterval
-	streamSignals chan StreamSignal
-	archiveError  string
-	archiveNotice time.Time
+	Store             *Store
+	Engine            *Engine
+	cancel            context.CancelFunc
+	wg                sync.WaitGroup
+	segments          chan Segment
+	mediaSince        atomic.Int64
+	streams           map[string]AvailabilityInterval
+	streamSignals     chan StreamSignal
+	archiveError      string
+	archiveNotice     time.Time
+	diagnosticMu      sync.Mutex
+	diagnosticNotices map[string]CameraFailure
 }
 
 func (r *Runtime) reportArchiveError(prefix string, err error, now time.Time) {
@@ -139,11 +141,19 @@ func (a *App) start(ctx context.Context) error {
 					}
 				}
 			}
+		}, func(camera Camera, message string) {
+			if rctx.Err() == nil {
+				r.reportCameraFailure(camera, "connection", message, time.Now())
+			}
 		})
 	})
 	for _, cam := range c.Cameras {
 		if cam.Enabled {
-			launch(func() { RunMotion(rctx, cam, a.Bins, r.Engine.Signal, s.Notice) })
+			launch(func() {
+				RunMotion(rctx, cam, a.Bins, r.Engine.Signal, func(message string) {
+					r.reportCameraFailure(cam, "detector", message, time.Now())
+				})
+			})
 		}
 	}
 	if c.S3.Enabled {
@@ -360,8 +370,10 @@ func (a *App) Status() map[string]any {
 			var last int64
 			_ = r.Store.DB.QueryRow("SELECT COALESCE(MAX(end),0) FROM segments WHERE camera=?", cam.ID).Scan(&last)
 			st := states[cam.ID]
+			connectionError, _ := r.Store.LastCameraFailure(cam.ID, "connection")
+			detectorError, _ := r.Store.LastCameraFailure(cam.ID, "detector")
 			online := cam.Enabled && r.mediaSince.Load() > 0 && r.streams[cam.ID].State == "online"
-			cams = append(cams, map[string]any{"id": cam.ID, "name": cam.Name, "enabled": cam.Enabled, "online": online, "last_segment": last, "motion": st.Active, "detector_healthy": st.Healthy, "source": st.Source})
+			cams = append(cams, map[string]any{"id": cam.ID, "name": cam.Name, "enabled": cam.Enabled, "online": online, "last_segment": last, "motion": st.Active, "detector_healthy": st.Healthy, "source": st.Source, "last_connection_error": connectionError, "last_detector_error": detectorError})
 		}
 		m["cameras"] = cams
 	}

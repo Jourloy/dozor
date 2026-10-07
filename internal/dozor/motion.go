@@ -3,6 +3,7 @@ package dozor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os/exec"
@@ -69,31 +70,39 @@ func (d *Detector) Frame(p []byte) bool {
 
 type LocalMotion struct{ FFmpeg string }
 
-func (l LocalMotion) Run(ctx context.Context, c Camera, emit func(MotionSignal)) error {
+func (l LocalMotion) Run(ctx context.Context, c Camera, emit func(MotionSignal)) (result error) {
 	if c.SubURL == "" {
 		return errors.New("нет дополнительного потока для детектора")
 	}
-	cmd := exec.CommandContext(ctx, l.FFmpeg, "-nostdin", "-v", "error", "-rtsp_transport", "tcp", "-timeout", "8000000", "-i", CameraURL(c, true), "-an", "-vf", "fps=5,scale=320:180", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1")
-	cmd.Stderr = io.Discard
+	input := CameraURL(c, true)
+	cmd := exec.CommandContext(ctx, l.FFmpeg, "-nostdin", "-v", "error", "-rtsp_transport", "tcp", "-timeout", "8000000", "-i", input, "-an", "-vf", "fps=5,scale=320:180", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1")
+	var stderr diagnosticBuffer
+	output := cameraCommandOutput(&stderr, input)
+	cmd.Stderr = output
 	out, e := cmd.StdoutPipe()
 	if e != nil {
 		return e
 	}
 	if e = cmd.Start(); e != nil {
-		return e
+		return cameraCommandError(ctx, "ffmpeg", e, &stderr, input)
 	}
 	defer func() {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
+		output.Flush()
+		if waitErr == nil {
+			waitErr = result
+		}
+		result = fmt.Errorf("поток детектора прерван: %w", cameraCommandError(ctx, "ffmpeg", waitErr, &stderr, input))
 	}()
 	d := NewDetector(320, 180, c.Sensitivity, c.Masks)
 	frame := make([]byte, 320*180)
 	for {
 		_, e = io.ReadFull(out, frame)
 		if e != nil {
-			return errors.New("поток детектора прерван")
+			return e
 		}
 		emit(MotionSignal{CameraID: c.ID, Active: d.Frame(frame), Healthy: true, Source: "local", At: time.Now()})
 	}
@@ -106,24 +115,21 @@ func RunMotion(ctx context.Context, c Camera, b Binaries, emit func(MotionSignal
 			if ctx.Err() != nil {
 				return
 			}
-			_ = err
 			emit(MotionSignal{CameraID: c.ID, Healthy: false, Source: "onvif", At: time.Now()})
 			if c.Motion == "onvif" {
-				notice("ONVIF-события недоступны: " + c.Name)
+				notice("ONVIF: " + cameraDiagnostic(err.Error(), CameraURL(c, false)))
 				if !pause(ctx, 10*time.Second) {
 					return
 				}
 				continue
 			}
 		}
-		if c.SubURL != "" {
-			_ = (LocalMotion{FFmpeg: b.FFmpeg}).Run(ctx, c, emit)
-		}
+		err := (LocalMotion{FFmpeg: b.FFmpeg}).Run(ctx, c, emit)
 		if ctx.Err() != nil {
 			return
 		}
 		emit(MotionSignal{CameraID: c.ID, Healthy: false, Source: "local", At: time.Now()})
-		notice("Детектор недоступен, временная непрерывная запись: " + c.Name)
+		notice("Дополнительный поток / локальный детектор: " + err.Error())
 		if !pause(ctx, 10*time.Second) {
 			return
 		}

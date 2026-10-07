@@ -43,14 +43,19 @@ func Probe(ctx context.Context, bin, input string, rtsp bool) (ProbeResult, erro
 	cmd.Stdout = &out
 	var stderr diagnosticBuffer
 	cmd.Stderr = &stderr
+	var cameraOutput *diagnosticLines
 	if rtsp {
-		// Camera URLs may contain credentials; only local file diagnostics are public.
-		cmd.Stderr = io.Discard
+		cameraOutput = cameraCommandOutput(&stderr, input)
+		cmd.Stderr = cameraOutput
 	}
 	var p ProbeResult
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if cameraOutput != nil {
+		cameraOutput.Flush()
+	}
+	if err != nil {
 		if rtsp {
-			return p, errors.New("не удалось получить видео: проверьте адрес, пароль и RTSP")
+			return p, fmt.Errorf("не удалось получить видео: %w", cameraCommandError(ctx, "ffprobe", err, &stderr, input))
 		}
 		return p, mediaCommandError(ctx, "ffprobe", err, &stderr)
 	}
@@ -151,7 +156,7 @@ func MediaConfig(c Config, b Binaries, socket string) ([]byte, error) {
 		}
 		paths[cam.ID] = map[string]any{"source": CameraURL(cam, false), "rtspTransport": "tcp", "record": true}
 	}
-	v := map[string]any{"logLevel": "error", "rtspAddress": "127.0.0.1:8554", "rtspTransports": []string{"tcp"}, "moq": false, "rtmp": false, "webrtc": false, "srt": false, "api": false, "playback": false, "paths": paths,
+	v := map[string]any{"logLevel": "error", "logDestinations": []string{"stdout"}, "logStructured": false, "rtspAddress": "127.0.0.1:8554", "rtspTransports": []string{"tcp"}, "moq": false, "rtmp": false, "webrtc": false, "srt": false, "api": false, "playback": false, "paths": paths,
 		// Remux on demand in RAM. fMP4 also works in native Safari over local HTTP.
 		"hls": true, "hlsAddress": liveAddress, "hlsAllowOrigins": []string{}, "hlsAlwaysRemux": false,
 		"hlsVariant": "fmp4", "hlsSegmentCount": 7, "hlsSegmentDuration": "1s", "hlsSegmentMaxSize": "16M", "hlsDirectory": "", "hlsMuxerCloseAfter": "15s",
@@ -159,17 +164,34 @@ func MediaConfig(c Config, b Binaries, socket string) ([]byte, error) {
 		"pathDefaults":      map[string]any{"recordPath": filepath.Join(c.Archive, "buffer", "%path", "%Y-%m-%d_%H-%M-%S.%f"), "recordFormat": "fmp4", "recordPartDuration": "1s", "recordMaxPartSize": "8M", "recordSegmentDuration": "5s", "recordDeleteAfter": "0s", "runOnRecordSegmentComplete": hook, "runOnOnline": hook + " --stream online", "runOnOffline": hook + " --stream offline"}}
 	return json.MarshalIndent(v, "", "  ") // JSON is a YAML subset; avoids interpolating credentials into syntax.
 }
-func RunMedia(ctx context.Context, c Config, b Binaries, socket, configPath string, notice func(string), ready func(bool)) {
+func RunMedia(ctx context.Context, c Config, b Binaries, socket, configPath string, notice func(string), ready func(bool), failed func(Camera, string)) {
+	reportFailure := func(message string) {
+		notice(message)
+		for _, camera := range c.Cameras {
+			if camera.Enabled {
+				failed(camera, message)
+			}
+		}
+	}
 	data, e := MediaConfig(c, b, socket)
-	if e != nil || AtomicWrite(configPath, data, 0600) != nil {
-		notice("Не удалось подготовить MediaMTX")
+	if e == nil {
+		e = AtomicWrite(configPath, data, 0600)
+	}
+	if e != nil {
+		reportFailure("Не удалось подготовить MediaMTX: " + e.Error())
 		return
 	}
 	for ctx.Err() == nil {
 		cmd := exec.CommandContext(ctx, b.MediaMTX, configPath)
 		cmd.Env = append(os.Environ(), "TZ=UTC")
-		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
+		output, global := mediaDiagnostics(c, notice, func(camera Camera, message string) {
+			if ctx.Err() == nil {
+				failed(camera, message)
+			}
+		})
+		// Sharing a writer makes os/exec serialize stdout and stderr writes.
+		cmd.Stdout = output
+		cmd.Stderr = output
 		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 		cmd.WaitDelay = 8 * time.Second
 		e = cmd.Start()
@@ -177,12 +199,15 @@ func RunMedia(ctx context.Context, c Config, b Binaries, socket, configPath stri
 			ready(true)
 			e = cmd.Wait()
 		}
+		output.Flush()
 		ready(false)
 		if ctx.Err() != nil {
 			return
 		}
-		_ = e
-		notice("MediaMTX остановился; повторный запуск через 5 секунд")
+		if e == nil {
+			e = errors.New("процесс завершился без ошибки")
+		}
+		reportFailure("MediaMTX остановился; повторный запуск через 5 секунд: " + mediaCommandError(ctx, "MediaMTX", e, global).Error())
 		if !pause(ctx, 5*time.Second) {
 			return
 		}

@@ -367,7 +367,7 @@ func (a *App) saveCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		if cam.SubURL != "" {
 			if _, e := Probe(r.Context(), a.Bins.FFprobe, CameraURL(cam, true), true); e != nil {
-				apiError(w, 400, "дополнительный поток недоступен")
+				apiError(w, 400, "дополнительный поток недоступен: "+e.Error())
 				return
 			}
 		}
