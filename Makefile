@@ -15,6 +15,7 @@ check:
 	go vet ./...
 	test -z "$$(gofmt -l version*.go cmd internal ops)"
 	node --check internal/dozor/web/app.js
+	node --check internal/dozor/web/storage-policy.js
 	node --check internal/dozor/web/live.js
 	node --check internal/dozor/web/availability.js
 	node --check internal/dozor/web/vendor/a00-menu.js

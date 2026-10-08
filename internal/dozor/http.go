@@ -111,6 +111,8 @@ func (a *App) Handler() http.Handler {
 	}))
 	m.HandleFunc("GET /api/v1/status", a.protected(func(w http.ResponseWriter, r *http.Request) { jsonOut(w, 200, a.Status()) }))
 	m.HandleFunc("POST /api/v1/updates/check", a.protected(a.requestUpdate))
+	m.HandleFunc("GET /api/v1/storage-policy", a.protected(a.storagePolicy))
+	m.HandleFunc("PUT /api/v1/storage-policy", a.protected(a.storagePolicy))
 	m.HandleFunc("GET /api/v1/reboot-schedule", a.protected(a.rebootSchedule))
 	m.HandleFunc("PUT /api/v1/reboot-schedule", a.protected(a.rebootSchedule))
 	m.HandleFunc("GET /api/v1/availability", a.protected(func(w http.ResponseWriter, r *http.Request) {

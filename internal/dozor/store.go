@@ -355,68 +355,6 @@ func (s *Store) RemoveSegment(path string) error {
 	return err
 }
 
-func (s *Store) PruneArchive(usage func() (uint64, uint64, error)) error {
-	s.mutate.Lock()
-	defer s.mutate.Unlock()
-	used, total, e := usage()
-	if e != nil || total == 0 {
-		return e
-	}
-	if float64(used)/float64(total) < .90 {
-		return nil
-	}
-	rows, e := s.DB.Query("SELECT payload FROM parts WHERE deleted=0 ORDER BY uploaded DESC,start")
-	if e != nil {
-		return e
-	}
-	var parts []Part
-	for rows.Next() {
-		var b string
-		var p Part
-		if e = rows.Scan(&b); e != nil {
-			rows.Close()
-			return e
-		}
-		if e = json.Unmarshal([]byte(b), &p); e != nil {
-			rows.Close()
-			return e
-		}
-		parts = append(parts, p)
-	}
-	rows.Close()
-	for _, p := range parts {
-		if float64(used)/float64(total) <= .85 {
-			break
-		}
-		if e = s.Guard.Check(); e != nil {
-			return e
-		}
-		p.Deleted = true
-		p.Lost = !p.Uploaded
-		if e = s.SavePart(p); e != nil {
-			return e
-		}
-		if e = os.Remove(filepath.Join(s.Root, p.Path)); e != nil && !errors.Is(e, os.ErrNotExist) {
-			return e
-		}
-		_ = s.DoneJob("part:" + p.ID)
-		if p.Lost {
-			ev, er := s.Event(p.EventID)
-			if er == nil {
-				ev.Lost = true
-				ev.Uploaded = false
-				_ = s.SaveEvent(ev)
-			}
-			s.Notice("Удалена невыгруженная запись: " + p.ID)
-		}
-		used, total, e = usage()
-		if e != nil {
-			return e
-		}
-	}
-	return nil
-}
-
 // Sidecars are written before publication and retain tombstones after deletion.
 func (s *Store) Recover() error {
 	root := filepath.Join(s.Root, "events")

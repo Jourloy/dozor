@@ -58,6 +58,7 @@ type App struct {
 	setupToken                string
 	updateMu                  sync.Mutex
 	reboots                   *RebootScheduler
+	storage                   *StoragePolicyFile
 }
 
 func NewApp(c *ConfigFile, b Binaries, dev bool, state, socket, version string) (*App, error) {
@@ -68,7 +69,11 @@ func NewApp(c *ConfigFile, b Binaries, dev bool, state, socket, version string) 
 	if err != nil {
 		return nil, err
 	}
-	a := &App{reboots: reboots, Config: c, Bins: b, Development: dev, StateDir: state, Socket: socket, Version: version, reload: make(chan struct{}, 1), sessions: map[string]Session{}, attempts: map[string]loginAttempt{}}
+	storage, err := loadStoragePolicy(state)
+	if err != nil {
+		return nil, err
+	}
+	a := &App{storage: storage, reboots: reboots, Config: c, Bins: b, Development: dev, StateDir: state, Socket: socket, Version: version, reload: make(chan struct{}, 1), sessions: map[string]Session{}, attempts: map[string]loginAttempt{}}
 	if c.Get().PasswordHash == "" {
 		p := filepath.Join(state, "setup-token")
 		token, e := os.ReadFile(p)
@@ -266,8 +271,8 @@ func (a *App) Run(ctx context.Context) error {
 					r.Store.Notice("Не удалось сверить буфер")
 				}
 				if !a.Development {
-					if e := r.Store.PruneArchive(func() (uint64, uint64, error) { return DiskUsage(r.Store.Root) }); e != nil {
-						r.Store.Notice("Не удалось очистить диск")
+					if e := r.Store.PruneArchive(time.Now(), a.storage.Get(), func() (uint64, uint64, error) { return DiskUsage(r.Store.Root) }); e != nil {
+						r.reportArchiveError("Не удалось очистить диск", e, time.Now())
 					}
 				}
 			}

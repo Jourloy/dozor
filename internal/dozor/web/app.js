@@ -457,6 +457,7 @@
   }
   /** Back to the login card: a logout, an expired session, or a first run (setup). */
   function showLogin({setup = false, notice = ''} = {}) {
+    storagePolicy.reset();
     stopPlayer();
     availability.token++;
     availability.data = null;
@@ -559,6 +560,7 @@
     window.scrollTo(0, 0);
     if (tab === 'events') run(() => loadEvents())();
     if (tab === 'overview') loadAvailability();
+    if (tab === 'settings') storagePolicy.load();
   }
   window.addEventListener('hashchange', () => {
     if (screen === 'shell') route();
@@ -725,12 +727,14 @@
       const share = Math.min(1, Math.max(0, used / total));
       setText($('#stat-disk'), percent.format(share));
       setText($('#stat-disk-detail'), t(bytes(used) + ' из ' + bytes(total)));
+      setText($('#storage-policy-usage'), t('Занято на диске: ' + bytes(used) + ' из ' + bytes(total) + ' (' + percent.format(share) + ')'));
       meter.style.setProperty('--meter-fill', share * 100 + '%');
       meter.setAttribute('aria-valuenow', String(Math.round(share * 100)));
       meter.setAttribute('aria-valuetext', percent.format(share) + ', ' + bytes(used) + ' из ' + bytes(total));
       meter.hidden = false;
     } else {
       setText($('#stat-disk'), '—');
+      setText($('#storage-policy-usage'), 'Заполнение диска пока неизвестно');
       setText($('#stat-disk-detail'), settings.disk_uuid ? (storageState.pending ? 'архив открывается' : 'архив недоступен') : 'ожидаем диск');
       meter.hidden = true;
     }
@@ -1495,6 +1499,7 @@
   $('#filter-date').addEventListener('change', run(() => loadEvents()));
 
   // ------------------------------------------------------------------ settings
+  const storagePolicy = new window.DozorStoragePolicy($('#storage-policy-form'), api);
   const settingsForm = $('#settings-form');
   watchFieldErrors(settingsForm);
   function renderDiskCurrent() {
@@ -1716,6 +1721,7 @@
     try {
       await refreshStatus();
       await loadAvailability();
+      if (currentTab === 'settings') await storagePolicy.load();
     } catch (error) {
       if (!(error && error.handled)) {
         failures += 1;

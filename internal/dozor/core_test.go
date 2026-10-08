@@ -150,7 +150,7 @@ func TestMotionMasksAndWarmup(t *testing.T) {
 		t.Fatal("movement not detected")
 	}
 }
-func TestRetentionPrioritizesUploadedAndReportsLoss(t *testing.T) {
+func TestRetentionPrioritizesAgeAndReportsLoss(t *testing.T) {
 	s := testStore(t)
 	now := time.Now().UnixMilli()
 	ev := Event{ID: ID(), CameraID: ID(), Start: now, End: now + 70000, Status: "closed"}
@@ -160,25 +160,25 @@ func TestRetentionPrioritizesUploadedAndReportsLoss(t *testing.T) {
 	second.Uploaded = true
 	must(t, s.SavePart(second))
 	calls := 0
-	must(t, s.PruneArchive(func() (uint64, uint64, error) {
+	must(t, s.PruneArchive(time.Now(), StoragePolicy{80}, func() (uint64, uint64, error) {
 		calls++
 		if calls == 1 {
 			return 95, 100, nil
 		}
-		return 84, 100, nil
+		return 79, 100, nil
 	}))
 	p, _ := s.Part(second.ID)
 	old, _ := s.Part(first.ID)
-	if !p.Deleted || old.Deleted {
-		t.Fatal("did not prefer uploaded part")
+	if p.Deleted || !old.Deleted {
+		t.Fatal("did not prefer oldest part")
 	}
 	calls = 0
-	must(t, s.PruneArchive(func() (uint64, uint64, error) {
+	must(t, s.PruneArchive(time.Now(), StoragePolicy{80}, func() (uint64, uint64, error) {
 		calls++
 		if calls == 1 {
 			return 95, 100, nil
 		}
-		return 84, 100, nil
+		return 79, 100, nil
 	}))
 	old, _ = s.Part(first.ID)
 	if !old.Lost || !old.Deleted || len(s.Notices()) == 0 {
@@ -319,12 +319,12 @@ func TestUploadAcknowledgedAfterLocalPruning(t *testing.T) {
 	p := fixturePart(t, s, ev, 1000, 9000)
 	remote := &memoryRemote{after: func() {
 		calls := 0
-		must(t, s.PruneArchive(func() (uint64, uint64, error) {
+		must(t, s.PruneArchive(time.Now(), StoragePolicy{80}, func() (uint64, uint64, error) {
 			calls++
 			if calls == 1 {
 				return 95, 100, nil
 			}
-			return 84, 100, nil
+			return 79, 100, nil
 		}))
 	}}
 	_, err := UploadOne(context.Background(), s, S3Config{}, remote)
