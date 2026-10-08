@@ -2,8 +2,6 @@ package dozor
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -145,13 +143,26 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) (err
 	if os.Geteuid() != 0 || runtime.GOOS != "linux" {
 		return errors.New("updates require root on Linux")
 	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	u := &Updater{Root: "/opt/dozor", System: &SystemIntegration{
-		Root: "/", RecoveryBinary: "/opt/dozor/current/bin/dozor",
-		Reload: func() error { return exec.Command("systemctl", "daemon-reload").Run() },
+		Root: "/", RecoveryBinary: self,
+		Reload: func() error {
+			child, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			return exec.CommandContext(child, "systemctl", "daemon-reload").Run()
+		},
 	}}
 	if recoverOnly {
 		return u.Recover()
 	}
+	unlock, err := lockUpdater(u.Root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	message := "Проверяем наличие обновлений"
 	status := func(msg string) {
 		message = msg
@@ -167,36 +178,59 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) (err
 		return e
 	}
 	client := UnixClient("/run/dozor/control.sock")
-	u.Immediate, err = readUpdateRequest(ctx, client)
+	u.Immediate, err = consumeUpdateMarker("/var/lib/dozor", "update-request")
 	if err != nil {
 		return err
 	}
-	c, e := LoadConfig(configPath)
-	if e != nil {
-		return e
+	reconcile, err := consumeUpdateMarker("/var/lib/dozor", "update-reconcile-request")
+	if err != nil {
+		return err
 	}
-	cfg := c.Get()
+	cfg, err := loadUpdaterSettings(configPath, filepath.Join(u.Root, "updater-settings.json"))
+	if err != nil {
+		return err
+	}
+	u.PublicKey, err = readUpdateKey("/etc/dozor/update.pub")
+	if err != nil {
+		return err
+	}
+	if reconcile {
+		current, err := u.installedHealth(ctx, client)
+		if err != nil {
+			return err
+		}
+		if err = u.reconcileSystem(ctx, current.Version); err != nil {
+			return err
+		}
+		status("Служба обновления готова")
+		return nil
+	}
 	if !cfg.AutoUpdate && !u.Immediate {
 		status("Автообновление выключено")
 		return nil
 	}
-	status("Проверяем наличие обновлений")
-	b, e := os.ReadFile("/etc/dozor/update.pub")
-	if e != nil {
-		return errors.New("Не установлен ключ проверки обновлений")
+	u.Stop = func() error {
+		child, cancel := context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+		return exec.CommandContext(child, "systemctl", "stop", "dozor.service").Run()
 	}
-	key, e := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
-	if e != nil || len(key) != ed25519.PublicKeySize {
-		return errors.New("Не установлен ключ проверки обновлений")
+	u.Start = func() error {
+		child, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return exec.CommandContext(child, "systemctl", "start", "dozor.service").Run()
 	}
-	u.PublicKey = key
-	u.Stop = func() error { return exec.Command("systemctl", "stop", "dozor.service").Run() }
-	u.Start = func() error { return exec.Command("systemctl", "start", "dozor.service").Run() }
 	u.Healthy = func(ctx context.Context, version string) bool {
 		for ctx.Err() == nil {
 			health, e := readProcessHealth(ctx, client)
 			if e == nil && health.Ready && health.Version == version {
 				return true
+			}
+			if e != nil {
+				u.HealthError = e.Error()
+			} else if health.Version != version {
+				u.HealthError = fmt.Sprintf("ожидалась версия %s, API сообщает %s", version, health.Version)
+			} else {
+				u.HealthError = health.failure()
 			}
 			if !pause(ctx, time.Second) {
 				break
@@ -208,8 +242,11 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) (err
 }
 
 type processHealth struct {
-	Version string `json:"version"`
-	Ready   bool   `json:"ready"`
+	Version  string      `json:"version"`
+	Ready    bool        `json:"ready"`
+	Core     HealthCheck `json:"core"`
+	Database HealthCheck `json:"database"`
+	Updater  HealthCheck `json:"updater"`
 }
 
 func readProcessHealth(ctx context.Context, client *http.Client) (processHealth, error) {
@@ -220,7 +257,7 @@ func readProcessHealth(ctx context.Context, client *http.Client) (processHealth,
 	}
 	res, e := client.Do(req)
 	if e != nil {
-		return health, errors.New("Dozor недоступна; обновление отложено")
+		return health, fmt.Errorf("API приложения недоступен: %w", e)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -233,18 +270,17 @@ func readProcessHealth(ctx context.Context, client *http.Client) (processHealth,
 }
 
 func preflightRelease(ctx context.Context, staged, version string) error {
-	for _, check := range []struct{ name, arg string }{{"dozor", "version"}, {"mediamtx", "--version"}, {"ffmpeg", "-version"}, {"ffprobe", "-version"}} {
-		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		cmd := exec.CommandContext(probeCtx, filepath.Join(staged, "bin", check.name), check.arg)
-		out, err := cmd.Output()
-		cancel()
-		if err != nil {
-			return errors.New("Новый пакет несовместим с устройством")
-		}
-		if check.name == "dozor" && strings.TrimSpace(string(out)) != version {
-			return errors.New("версия бинарника не совпадает с версией подписанного пакета")
-		}
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(probeCtx, filepath.Join(staged, "bin", "dozor"), "version").Output()
+	if err != nil {
+		return errors.New("Новый пакет несовместим с устройством")
 	}
+	if strings.TrimSpace(string(out)) != version {
+		return errors.New("версия бинарника не совпадает с версией подписанного пакета")
+	}
+	// Recorder failures are reported by runtime diagnostics. They must not veto
+	// a working control plane that can install the next corrective release.
 	return nil
 }
 
@@ -254,12 +290,14 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 			status(err.Error())
 		}
 	}()
-	current, e := readProcessHealth(ctx, client)
+	current, e := u.installedHealth(ctx, client)
 	if e != nil {
 		return e
 	}
+	// Repair system integration when possible, but a damaged application binary
+	// must not prevent the independent helper from installing its replacement.
 	if e = u.reconcileSystem(ctx, current.Version); e != nil {
-		return e
+		status("Не удалось согласовать текущую интеграцию; проверяем исправление: " + e.Error())
 	}
 	s, e := u.Fetch(ctx, address)
 	if e != nil {
@@ -278,8 +316,11 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 	if e = preflightRelease(ctx, staged, s.Release.Version); e != nil {
 		return e
 	}
+	if e = u.checkCandidateUpdater(ctx, staged, s); e != nil {
+		return e
+	}
 	// Recheck after the download in case the running application changed meanwhile.
-	current, e = readProcessHealth(ctx, client)
+	current, e = u.installedHealth(ctx, client)
 	if e != nil {
 		return e
 	}
@@ -300,17 +341,23 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 	if u.Immediate {
 		prepareURL += "?immediate=true"
 	}
-	req, _ := http.NewRequestWithContext(ctx, "POST", prepareURL, nil)
+	prepareCtx, cancelPrepare := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelPrepare()
+	req, _ := http.NewRequestWithContext(prepareCtx, "POST", prepareURL, nil)
 	res, e := client.Do(req)
-	if e != nil {
-		return errors.New("Dozor недоступна; обновление отложено")
+	if e == nil {
+		io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		if res.StatusCode == http.StatusConflict {
+			status("Обновление загружено; ожидаем завершения событий")
+			return u.clearJournal()
+		}
+		if res.StatusCode != 204 && res.StatusCode < 500 {
+			return fmt.Errorf("подготовка обновления: HTTP %d", res.StatusCode)
+		}
 	}
-	io.Copy(io.Discard, res.Body)
-	res.Body.Close()
-	if res.StatusCode != 204 {
-		status("Обновление загружено; ожидаем завершения событий")
-		return u.clearJournal()
-	}
+	// A dead API cannot veto a fully verified corrective update. systemd stops
+	// its entire cgroup before the candidate is switched into place.
 	status("Устанавливаем обновление; Dozor перезапускается")
 	if e = u.Apply(ctx, s); e != nil {
 		return e
@@ -329,4 +376,16 @@ func BundleBinaries() Binaries {
 		return name
 	}
 	return Binaries{resolve("mediamtx"), resolve("ffmpeg"), resolve("ffprobe"), self}
+}
+
+func (h processHealth) failure() string {
+	for _, c := range []struct {
+		name  string
+		check HealthCheck
+	}{{"приложение", h.Core}, {"база", h.Database}, {"обновлятор", h.Updater}} {
+		if !c.check.Ready && c.check.State != "" {
+			return c.name + ": " + c.check.State + " " + c.check.Error
+		}
+	}
+	return "приложение не подтвердило готовность"
 }

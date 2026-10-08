@@ -29,9 +29,10 @@ type SystemIntegration struct {
 }
 
 type systemManifest struct {
-	Protocol int    `json:"protocol"`
-	Version  string `json:"version"`
-	Polkit   string `json:"polkit"`
+	Protocol        int    `json:"protocol"`
+	UpdaterProtocol int    `json:"updater_protocol,omitempty"`
+	Version         string `json:"version"`
+	Polkit          string `json:"polkit"`
 }
 
 func PrintSystemIntegration(w io.Writer, version string) error {
@@ -39,7 +40,7 @@ func PrintSystemIntegration(w io.Writer, version string) error {
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(w).Encode(systemManifest{Protocol: 1, Version: version, Polkit: string(rules)})
+	return json.NewEncoder(w).Encode(systemManifest{Protocol: 1, UpdaterProtocol: 1, Version: version, Polkit: string(rules)})
 }
 
 func releaseSystemIntegration(ctx context.Context, release, version string) (systemManifest, error) {
@@ -141,7 +142,7 @@ func (s *SystemIntegration) ensureRecovery() error {
 			return err
 		}
 	}
-	for _, name := range []string{"dozor-recover.service", "dozor-rollback.service", "dozor-update.service"} {
+	for _, name := range []string{"dozor-recover.service", "dozor-rollback.service"} {
 		b, err := ops.Files.ReadFile(name)
 		if err != nil {
 			return err
@@ -175,17 +176,38 @@ func (s *SystemIntegration) matches(release string, m systemManifest) bool {
 		return false
 	}
 	b, err := os.ReadFile(path)
-	return err == nil && string(b) == m.Polkit
+	if err != nil || string(b) != m.Polkit {
+		return false
+	}
+	unit, err := os.ReadFile(filepath.Join(s.Root, "etc/systemd/system/dozor-update.service"))
+	return err == nil && bytes.Equal(unit, updaterUnit(m))
 }
 
 func (s *SystemIntegration) install(release string, m systemManifest) error {
 	if err := copySystemFile(filepath.Join(release, "bin/dozor"), filepath.Join(s.Root, systemHelperPath), 0755); err != nil {
 		return err
 	}
-	return AtomicWrite(filepath.Join(s.Root, systemPolicyPath), []byte(m.Polkit), 0644)
+	if err := AtomicWrite(filepath.Join(s.Root, systemPolicyPath), []byte(m.Polkit), 0644); err != nil {
+		return err
+	}
+	if err := AtomicWrite(filepath.Join(s.Root, "etc/systemd/system/dozor-update.service"), updaterUnit(m), 0644); err != nil {
+		return err
+	}
+	if s.Reload != nil {
+		return s.Reload()
+	}
+	return nil
 }
 
-var managedSystemFiles = [...]string{systemHelperPath, systemPolicyPath}
+func updaterUnit(m systemManifest) []byte {
+	unit, _ := ops.Files.ReadFile("dozor-update.service")
+	if m.UpdaterProtocol == 0 {
+		unit = bytes.ReplaceAll(unit, []byte("/usr/local/libexec/dozor-system system update"), []byte("/opt/dozor/current/bin/dozor system update"))
+	}
+	return unit
+}
+
+var managedSystemFiles = [...]string{systemHelperPath, systemPolicyPath, "etc/systemd/system/dozor-update.service"}
 
 type systemFileBackup struct {
 	Present bool   `json:"present"`
@@ -218,7 +240,7 @@ func (s *SystemIntegration) snapshot(root string) (string, error) {
 			_ = os.RemoveAll(dir)
 		}
 	}()
-	backup := systemBackup{Protocol: 1}
+	backup := systemBackup{Protocol: 2}
 	for i, path := range managedSystemFiles {
 		file := systemFileBackup{}
 		source := filepath.Join(s.Root, path)
@@ -261,7 +283,7 @@ func (s *SystemIntegration) restore(root, name string) error {
 		return err
 	}
 	var backup systemBackup
-	if json.Unmarshal(b, &backup) != nil || backup.Protocol != 1 || len(backup.Files) != len(managedSystemFiles) {
+	if json.Unmarshal(b, &backup) != nil || !((backup.Protocol == 1 && len(backup.Files) == 2) || (backup.Protocol == 2 && len(backup.Files) == len(managedSystemFiles))) {
 		return errors.New("invalid system backup")
 	}
 	// Validate the entire snapshot before replacing any live system file.
@@ -289,6 +311,9 @@ func (s *SystemIntegration) restore(root, name string) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+	}
+	if s.Reload != nil {
+		return s.Reload()
 	}
 	return nil
 }
@@ -323,7 +348,7 @@ func (u *Updater) reconcileSystem(ctx context.Context, version string) error {
 		return err
 	}
 	if u.System.matches(current, m) {
-		return nil
+		return AtomicWrite(filepath.Join(current, ".confirmed-version"), []byte(version), 0644)
 	}
 	backup, err := u.System.snapshot(u.Root)
 	if err != nil {
@@ -339,5 +364,8 @@ func (u *Updater) reconcileSystem(ctx context.Context, version string) error {
 		}
 		return err
 	}
-	return u.finishUpdate(j)
+	if err = u.finishUpdate(j); err != nil {
+		return err
+	}
+	return AtomicWrite(filepath.Join(current, ".confirmed-version"), []byte(version), 0644)
 }

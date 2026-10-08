@@ -116,7 +116,7 @@ func TestSensitivityReloadStartsDespiteUnfinishedVideo(t *testing.T) {
 	defer app.stop()
 	must(t, app.start(ctx))
 	ev, seg := pendingRecording(t, app.runtime.Store, c.Cameras[0].ID, time.Now().Add(-time.Minute))
-	for _, camera := range c.Cameras {
+	for attempt, camera := range c.Cameras {
 		camera.Sensitivity = .95
 		body, err := json.Marshal(camera)
 		must(t, err)
@@ -134,6 +134,18 @@ func TestSensitivityReloadStartsDespiteUnfinishedVideo(t *testing.T) {
 		}
 		app.stop()
 		must(t, app.start(ctx))
+		deadline := time.Now().Add(4 * time.Second)
+		for {
+			actual, err := app.runtime.Store.Event(ev.ID)
+			must(t, err)
+			if actual.Status == "closed" || actual.AssemblyFailures >= attempt+1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("background recovery did not make progress", actual)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 	status := app.Status()
 	if status["disk_ready"] != true || status["storage_error"] != "" || len(status["cameras"].([]any)) != 4 {
@@ -157,7 +169,7 @@ func TestSensitivityReloadStartsDespiteUnfinishedVideo(t *testing.T) {
 	}
 	reported := false
 	for _, notice := range app.runtime.Store.Notices() {
-		if strings.Contains(notice.Message, "Не удалось восстановить часть записей") {
+		if strings.Contains(notice.Message, "Ошибка обработки архива") {
 			for _, detail := range []string{ev.CameraID, ev.ID, seg.Path, "в потоке нет видео", "повтор через 5 с"} {
 				if !strings.Contains(notice.Message, detail) {
 					t.Errorf("recovery notice missing %q: %s", detail, notice.Message)

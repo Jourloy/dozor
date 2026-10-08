@@ -40,14 +40,15 @@ type UpdateJournal struct {
 	SystemBackup string `json:"system_backup,omitempty"`
 }
 type Updater struct {
-	Root      string
-	PublicKey ed25519.PublicKey
-	Client    *http.Client
-	Stop      func() error
-	Start     func() error
-	Healthy   func(context.Context, string) bool
-	System    *SystemIntegration
-	Immediate bool
+	Root        string
+	PublicKey   ed25519.PublicKey
+	Client      *http.Client
+	Stop        func() error
+	Start       func() error
+	Healthy     func(context.Context, string) bool
+	System      *SystemIntegration
+	HealthError string
+	Immediate   bool
 }
 
 var versionPattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -193,11 +194,17 @@ func (u *Updater) Stage(ctx context.Context, s SignedRelease) (string, error) {
 		return "", e
 	}
 	dest := filepath.Join(releases, r.Version)
+	cached := false
 	if b, e := os.ReadFile(filepath.Join(dest, ".bundle-sha256")); e == nil {
-		if string(b) == r.SHA256 {
+		if string(b) != r.SHA256 {
+			return "", errors.New("версия уже существует с другим хешем")
+		}
+		_, packageErr := os.Stat(filepath.Join(dest, ".bundle.tar.gz"))
+		_, metadataErr := os.Stat(filepath.Join(dest, ".release.json"))
+		if packageErr == nil && metadataErr == nil {
 			return dest, nil
 		}
-		return "", errors.New("версия уже существует с другим хешем")
+		cached = true
 	}
 	archive, e := os.CreateTemp(releases, ".download-*")
 	if e != nil {
@@ -221,6 +228,21 @@ func (u *Updater) Stage(ctx context.Context, s SignedRelease) (string, error) {
 	n, e := io.Copy(io.MultiWriter(archive, h), io.LimitReader(res.Body, r.Size+1))
 	if e != nil || n != r.Size || hex.EncodeToString(h.Sum(nil)) != r.SHA256 {
 		return "", errors.New("пакет повреждён или загружен не полностью")
+	}
+	if cached {
+		if e = archive.Sync(); e != nil {
+			return "", e
+		}
+		if e = copySystemFile(archive.Name(), filepath.Join(dest, ".bundle.tar.gz"), 0444); e != nil {
+			return "", e
+		}
+		if e = WriteJSON(filepath.Join(dest, ".release.json"), s); e != nil {
+			return "", e
+		}
+		if e = os.Chmod(filepath.Join(dest, ".release.json"), 0644); e != nil {
+			return "", e
+		}
+		return dest, syncDirectory(dest)
 	}
 	if _, e = archive.Seek(0, 0); e != nil {
 		return "", e
@@ -305,6 +327,18 @@ func (u *Updater) Stage(ctx context.Context, s SignedRelease) (string, error) {
 	version, e := os.ReadFile(filepath.Join(stage, "VERSION"))
 	if e != nil || strings.TrimSpace(string(version)) != r.Version {
 		return "", errors.New("release version mismatch")
+	}
+	if e = archive.Sync(); e != nil {
+		return "", e
+	}
+	if e = os.Link(archive.Name(), filepath.Join(stage, ".bundle.tar.gz")); e != nil {
+		return "", e
+	}
+	if e = WriteJSON(filepath.Join(stage, ".release.json"), s); e != nil {
+		return "", e
+	}
+	if e = os.Chmod(filepath.Join(stage, ".release.json"), 0644); e != nil {
+		return "", e
 	}
 	if e = AtomicWrite(filepath.Join(stage, ".bundle-sha256"), []byte(r.SHA256), 0444); e != nil {
 		return "", e
@@ -416,6 +450,15 @@ func (u *Updater) Apply(ctx context.Context, s SignedRelease) error {
 		if integration, e = releaseSystemIntegration(ctx, dest, s.Release.Version); e != nil {
 			return e
 		}
+		transitionFile := filepath.Join(dest, ".catalog-transition")
+		previousManifest, previousErr := releaseSystemIntegration(ctx, previous, filepath.Base(previous))
+		if previousErr != nil || previousManifest.UpdaterProtocol == 0 {
+			if e = AtomicWrite(transitionFile, []byte(ID()), 0644); e != nil {
+				return e
+			}
+		} else if e = removeDurable(transitionFile); e != nil {
+			return e
+		}
 		if e = u.System.ensureRecovery(); e != nil {
 			return e
 		}
@@ -460,7 +503,7 @@ func (u *Updater) Apply(ctx context.Context, s SignedRelease) error {
 	health, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	if u.Healthy != nil && !u.Healthy(health, s.Release.Version) {
-		return rollback(errors.New("обновление не прошло проверку; предыдущая версия восстановлена"))
+		return rollback(fmt.Errorf("обновление не прошло проверку; предыдущая версия восстановлена: %s", u.HealthError))
 	}
 	return u.finishUpdate(j)
 }

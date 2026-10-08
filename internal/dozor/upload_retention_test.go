@@ -65,6 +65,7 @@ func TestRetentionNeverReuploadsAcknowledgedFiles(t *testing.T) {
 			recovered, err := OpenStore(guard)
 			must(t, err)
 			defer recovered.Close()
+			finishRecovery(t, recovered)
 			must(t, recovered.SetTarget(cfg))
 			drainUploads(t, recovered, cfg, remote)
 			if recovered.QueueCount() != 0 || len(remote.keys) != 2 {

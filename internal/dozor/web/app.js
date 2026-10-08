@@ -711,6 +711,16 @@
     setText($('#storage-alert-title'), storageState.title);
     setText($('#storage-alert-text'), storageState.description);
     setText($('#storage-alert-action'), storageState.action || 'Проверить настройки');
+    const recovery = s.health && s.health.recovery || s.recovery;
+    const recovering = recovery && recovery.state !== 'complete' && recovery.state !== '';
+    $('#recovery-alert').hidden = !recovering;
+    if (recovering) setText($('#recovery-alert-text'), t('Новые записи доступны. История появляется по мере восстановления. Проверено файлов и каталогов: ' + number.format(recovery.processed || 0) + '. Ошибок: ' + number.format(recovery.errors || 0) + '.'));
+    const health = s.health || {};
+    const problems = [['core', 'Приложение'], ['database', 'База'], ['updater', 'Обновлятор'], ['recorder', 'Видеосервис']]
+      .filter(([key]) => health[key] && health[key].state && health[key].state !== 'starting' && !health[key].ready)
+      .map(([key, title]) => title + ': ' + (health[key].error || (key === 'recorder' ? 'не запущен' : health[key].state)));
+    $('#health-alert').hidden = !problems.length;
+    setText($('#health-alert-text'), problems.join('. '));
     const upload = $('#s3-alert');
     upload.hidden = !(settings.s3.enabled && s.upload_error);
     setText($('#s3-alert-text'), humanize(s.upload_error, t('Часть записей не удалось выгрузить. Выгрузка повторится автоматически.')));

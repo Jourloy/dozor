@@ -23,16 +23,19 @@ type MotionState struct {
 	Started time.Time
 }
 type Engine struct {
-	Store        *Store
-	Bins         Binaries
-	mu           sync.Mutex
-	states       map[string]MotionState
-	active       map[string]string
-	online       map[string]bool
-	disconnected map[string]int64
-	retries      map[string]assemblyRetry
-	paused       bool
-	assemble     func(context.Context, *Store, Binaries, Event, []Segment) (Part, error)
+	Store          *Store
+	Bins           Binaries
+	mu             sync.Mutex
+	tickMu         sync.Mutex
+	assemblyCancel context.CancelFunc
+	states         map[string]MotionState
+	active         map[string]string
+	online         map[string]bool
+	disconnected   map[string]int64
+	retries        map[string]assemblyRetry
+	paused         bool
+	deferRecovered bool
+	assemble       func(context.Context, *Store, Binaries, Event, []Segment) (Part, error)
 }
 
 type assemblyRetry struct {
@@ -88,7 +91,7 @@ func (e *Engine) Disconnect(camera string, at time.Time) error {
 	}
 	ev.DisconnectedAt = at.UnixMilli()
 	ev.Uploaded = false
-	if err = e.Store.SaveEvent(ev); err != nil {
+	if err = e.Store.saveEvent(ev, ev.Status == "closed"); err != nil {
 		return err
 	}
 	if ev.Status == "closed" {
@@ -191,6 +194,9 @@ func (e *Engine) PrepareUpdate(immediate bool) bool {
 	if immediate {
 		// Shutdown finishes the current streams; startup reconciles pending events.
 		e.paused = true
+		if e.assemblyCancel != nil {
+			e.assemblyCancel()
+		}
 		return true
 	}
 	if len(e.active) > 0 {
@@ -208,6 +214,10 @@ func (e *Engine) PrepareUpdate(immediate bool) bool {
 	return true
 }
 func (e *Engine) Tick(ctx context.Context, now time.Time) error {
+	if !e.tickMu.TryLock() {
+		return nil
+	}
+	defer e.tickMu.Unlock()
 	started := time.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -256,6 +266,9 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) error {
 	var assemblyError error
 eventsLoop:
 	for _, ev := range events {
+		if e.deferRecovered && ev.Status == "closing" {
+			continue
+		}
 		if now.Before(e.retries[ev.ID].next) {
 			continue
 		}
@@ -284,7 +297,28 @@ eventsLoop:
 					}
 					prev = seg.End
 				}
-				p, err := e.assemble(ctx, e.Store, e.Bins, ev, selected)
+				assemblyCtx, cancelAssembly := context.WithCancel(ctx)
+				e.assemblyCancel = cancelAssembly
+				e.Store.mutate.Unlock()
+				e.mu.Unlock()
+				p, err := e.assemble(assemblyCtx, e.Store, e.Bins, ev, selected)
+				cancelAssembly()
+				e.mu.Lock()
+				e.Store.mutate.Lock()
+				e.assemblyCancel = nil
+				if errors.Is(err, context.Canceled) && e.paused {
+					return nil
+				}
+				latest, readErr := e.Store.Event(ev.ID)
+				if readErr != nil {
+					return readErr
+				}
+				latest.ShortPrebuffer = latest.ShortPrebuffer || ev.ShortPrebuffer
+				latest.Incomplete = latest.Incomplete || ev.Incomplete
+				ev = latest
+				if errors.Is(err, errStaleAssembly) {
+					continue eventsLoop
+				}
 				if err != nil {
 					if ctx.Err() != nil {
 						return ctx.Err()
@@ -357,11 +391,8 @@ eventsLoop:
 			if err = e.markLastPart(ev); err != nil {
 				return eventError(ev, "отметка последней части", err)
 			}
-			if err = e.Store.SaveEvent(ev); err != nil {
+			if err = e.Store.saveEvent(ev, true); err != nil {
 				return eventError(ev, "завершение события", err)
-			}
-			if err = e.Store.Enqueue("event", ev.ID); err != nil {
-				return eventError(ev, "добавление события в очередь выгрузки", err)
 			}
 			delete(e.retries, ev.ID)
 			if e.active[ev.CameraID] == ev.ID {

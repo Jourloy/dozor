@@ -198,6 +198,8 @@ func TestCrashRecoveryAndManifest(t *testing.T) {
 	s, e = OpenStore(g)
 	must(t, e)
 	defer s.Close()
+	must(t, s.ReplayOperations(context.Background()))
+	must(t, s.RecoverPending(context.Background()))
 	actual, e := s.Event(ev.ID)
 	must(t, e)
 	if actual.Cursor != p.End || actual.Status != "closing" || !actual.Incomplete || actual.AssemblyFailures != 0 || s.QueueCount() != 1 {

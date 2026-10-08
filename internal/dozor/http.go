@@ -137,7 +137,7 @@ func (a *App) Handler() http.Handler {
 		// End the visible window at the last observation, so the sub-second
 		// delay between the worker tick and this request is not an unknown gap.
 		observed := time.Now().UnixMilli()
-		for _, state := range a.runtime.streams {
+		for _, state := range a.runtime.streamSnapshot() {
 			observed = min(observed, state.End)
 		}
 		history, err := a.runtime.Store.Availability(cameras, camera, time.UnixMilli(observed))

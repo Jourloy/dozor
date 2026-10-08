@@ -1,6 +1,7 @@
 package dozor
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 type Disk struct {
@@ -54,7 +56,9 @@ type archiveMountInfo struct {
 func archiveMount(root string) (archiveMountInfo, error) {
 	// systemd's mount namespace can retain covered bind mounts after hotplug.
 	// Inspect only the visible filesystem, not the layers underneath it.
-	b, e := exec.Command("findmnt", "--json", "--uniq", "--mountpoint", root, "--output", "TARGET,UUID,FSTYPE,OPTIONS").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	b, e := exec.CommandContext(ctx, "findmnt", "--json", "--uniq", "--mountpoint", root, "--output", "TARGET,UUID,FSTYPE,OPTIONS").Output()
 	if e != nil {
 		return archiveMountInfo{}, errors.New("диск отключён")
 	}

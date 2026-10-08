@@ -103,6 +103,7 @@ func (r *Runtime) initStreams(cameras []Camera, now time.Time) error {
 			return err
 		}
 	}
+	r.publishStreams()
 	return r.Store.PruneAvailability(now)
 }
 
@@ -119,11 +120,6 @@ func (r *Runtime) setStream(ctx context.Context, camera string, online bool, at 
 		return nil
 	}
 	if !online {
-		// The last file no longer needs a following segment to prove rotation.
-		// Scan before closing the event, including when its completion hook was lost.
-		if err := scanCameraSegments(ctx, r.Store, r.Engine.Bins.FFprobe, camera, at, r.Engine.AddSegment); err != nil {
-			return err
-		}
 		if err := r.Engine.Disconnect(camera, time.UnixMilli(at)); err != nil {
 			return err
 		}
@@ -137,7 +133,14 @@ func (r *Runtime) setStream(ctx context.Context, camera string, online bool, at 
 		return err
 	}
 	r.streams[camera] = v
+	r.publishStreams()
 	r.Engine.SetOnline(camera, online)
+	if !online { // Late completion hooks/reconciliation reopen the interrupted tail.
+		select {
+		case r.bufferWake <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -193,7 +196,7 @@ func (r *Runtime) reconcileSegments(ctx context.Context) error {
 	if err := scanSegments(ctx, r.Store, r.Engine.Bins.FFprobe, r.mediaSince.Load() > 0, r.Engine.AddSegment); err != nil {
 		return err
 	}
-	for camera, state := range r.streams {
+	for camera, state := range r.streamSnapshot() {
 		if state.State == "offline" {
 			// Include the tail of the disconnected stream. A newer file could
 			// belong to a reconnect whose online hook was lost and still be open.

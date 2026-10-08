@@ -65,13 +65,32 @@ type Notice struct {
 	Message string `json:"message"`
 }
 type Store struct {
-	DB     *sql.DB
-	Root   string
-	Guard  Guard
-	mutate sync.Mutex
+	DB              *sql.DB
+	Root            string
+	Guard           Guard
+	mutate          sync.Mutex
+	files           sync.Mutex
+	recoveryMu      sync.Mutex
+	recoveryPath    string
+	recoveryEntries []os.DirEntry
+	openedAt        int64
 }
 
 func OpenStore(g Guard) (*Store, error) {
+	if err := resumeCatalogQuarantine(g); err != nil {
+		return nil, err
+	}
+	s, err := openCatalog(g)
+	if !corruptCatalog(err) {
+		return s, err
+	}
+	if err = quarantineCatalog(g); err != nil {
+		return nil, err
+	}
+	return openCatalog(g)
+}
+
+func openCatalog(g Guard) (*Store, error) {
 	if e := g.Check(); e != nil {
 		return nil, e
 	}
@@ -94,13 +113,19 @@ func OpenStore(g Guard) (*Store, error) {
  CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT);
  CREATE TABLE IF NOT EXISTS availability(camera TEXT,start INTEGER,end INTEGER,state TEXT,PRIMARY KEY(camera,start));
  CREATE TABLE IF NOT EXISTS camera_diagnostics(camera TEXT,kind TEXT,at INTEGER NOT NULL,message TEXT NOT NULL,PRIMARY KEY(camera,kind));
- CREATE INDEX IF NOT EXISTS availability_end ON availability(end);`)
+ CREATE INDEX IF NOT EXISTS availability_end ON availability(end);
+ CREATE INDEX IF NOT EXISTS pending_events ON events(start) WHERE status!='closed';
+ CREATE TABLE IF NOT EXISTS file_operations(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS recovery_directories(path TEXT PRIMARY KEY,cursor TEXT NOT NULL DEFAULT '',done INTEGER NOT NULL DEFAULT 0);
+ CREATE INDEX IF NOT EXISTS recovery_pending ON recovery_directories(done,path);
+ CREATE TABLE IF NOT EXISTS recovery_parts(directory TEXT,id TEXT,payload TEXT NOT NULL,PRIMARY KEY(directory,id));
+ CREATE TABLE IF NOT EXISTS health_probe(id INTEGER PRIMARY KEY,value TEXT NOT NULL);`)
 	if e != nil {
 		db.Close()
 		return nil, e
 	}
-	s := &Store{DB: db, Root: g.Root, Guard: g}
-	if e = s.Recover(); e != nil {
+	s := &Store{DB: db, Root: g.Root, Guard: g, openedAt: time.Now().UnixMilli()}
+	if e = s.scheduleRecovery(); e != nil {
 		db.Close()
 		return nil, e
 	}
@@ -111,15 +136,7 @@ func eventDir(e Event) string {
 	return filepath.Join("events", e.CameraID, time.UnixMilli(e.Start).UTC().Format("2006-01-02"), e.ID)
 }
 func (s *Store) SaveEvent(e Event) error {
-	if err := s.Guard.Check(); err != nil {
-		return err
-	}
-	b, _ := json.Marshal(e)
-	_, err := s.DB.Exec(`INSERT INTO events VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET end=excluded.end,cursor=excluded.cursor,status=excluded.status,payload=excluded.payload`, e.ID, e.CameraID, e.Start, e.End, e.Cursor, e.Status, string(b))
-	if err != nil {
-		return err
-	}
-	return WriteJSON(filepath.Join(s.Root, eventDir(e), "event.json"), e)
+	return s.saveEvent(e, false)
 }
 func (s *Store) Event(id string) (Event, error) {
 	var b string
@@ -232,15 +249,7 @@ func (s *Store) Segments(cam string, after, until int64) ([]Segment, error) {
 	return v, rows.Err()
 }
 func (s *Store) SavePart(p Part) error {
-	if e := s.Guard.Check(); e != nil {
-		return e
-	}
-	b, _ := json.Marshal(p)
-	_, e := s.DB.Exec(`INSERT INTO parts VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET uploaded=excluded.uploaded,deleted=excluded.deleted,payload=excluded.payload`, p.ID, p.EventID, p.Start, p.End, p.Uploaded, p.Deleted, string(b))
-	if e != nil {
-		return e
-	}
-	return WriteJSON(filepath.Join(s.Root, p.Path+".json"), p)
+	return s.savePart(p)
 }
 func (s *Store) Part(id string) (Part, error) {
 	var b string
@@ -252,7 +261,7 @@ func (s *Store) Part(id string) (Part, error) {
 	return p, e
 }
 func (s *Store) Parts(id string) ([]Part, error) {
-	rows, e := s.DB.Query("SELECT payload FROM parts WHERE event=? ORDER BY start", id)
+	rows, e := s.DB.Query("SELECT payload FROM parts WHERE event=? ORDER BY start,id", id)
 	if e != nil {
 		return nil, e
 	}
@@ -315,7 +324,7 @@ func (s *Store) QueueCount() int {
 	return n
 }
 func (s *Store) PruneBuffer(now time.Time) error {
-	rows, e := s.DB.Query(`SELECT path FROM segments s WHERE end<? AND NOT EXISTS(SELECT 1 FROM events e WHERE e.camera=s.camera AND e.status!='closed' AND e.cursor<s.end AND e.end>s.start)`, now.Add(-75*time.Second).UnixMilli())
+	rows, e := s.DB.Query(`SELECT path FROM segments s WHERE end<? AND (s.end>=? OR NOT EXISTS(SELECT 1 FROM recovery_directories WHERE done=0)) AND NOT EXISTS(SELECT 1 FROM events e WHERE e.camera=s.camera AND e.status!='closed' AND e.cursor<s.end AND e.end>s.start)`, now.Add(-75*time.Second).UnixMilli(), s.openedAt)
 	if e != nil {
 		return e
 	}
@@ -341,18 +350,7 @@ func (s *Store) PruneBuffer(now time.Time) error {
 }
 
 func (s *Store) RemoveSegment(path string) error {
-	if err := s.Guard.Check(); err != nil {
-		return err
-	}
-	full, err := checkedPath(s.Root, path)
-	if err != nil {
-		return err
-	}
-	if err = os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	_, err = s.DB.Exec("DELETE FROM segments WHERE path=?", path)
-	return err
+	return s.recordFileOperation("segment:"+path, fileOperation{Kind: "delete_segment", Path: path})
 }
 
 // Sidecars are written before publication and retain tombstones after deletion.

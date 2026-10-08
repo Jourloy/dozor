@@ -278,6 +278,7 @@ func TestOfflineReconciliationRecoversNewestSegmentWithoutHook(t *testing.T) {
 		online: {Start: now.UnixMilli(), State: "online"},
 	}}
 	r.mediaSince.Store(now.Unix())
+	r.publishStreams()
 	must(t, r.reconcileSegments(context.Background()))
 	must(t, e.Tick(context.Background(), now))
 	parts, err := s.Parts(ev.ID)

@@ -46,6 +46,7 @@ func TestCameraFailuresSurviveJournalPruningAndRestart(t *testing.T) {
 	_, err = s.DB.Exec("DELETE FROM notices")
 	must(t, err)
 	app := &App{Config: &ConfigFile{value: Config{Cameras: []Camera{cam, other}}}, runtime: r, StateDir: t.TempDir()}
+	app.publishStatus(r)
 	status := app.Status()
 	camera := status["cameras"].([]any)[0].(map[string]any)
 	if camera["online"] != true || camera["last_connection_error"].(*CameraFailure).Message != connection.Message || camera["last_detector_error"].(*CameraFailure).Message != "ffmpeg: 404 Not Found" {

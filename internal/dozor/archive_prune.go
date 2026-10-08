@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -163,7 +162,7 @@ func (s *Store) finishArchivePrune(job pendingPrune) error {
 	if p.Lost {
 		ev.Lost = true
 		ev.Uploaded = false
-		if err = s.SaveEvent(ev); err != nil {
+		if err = s.saveEvent(ev, true); err != nil {
 			return err
 		}
 		if err = s.Enqueue("event", ev.ID); err != nil {
@@ -173,7 +172,7 @@ func (s *Store) finishArchivePrune(job pendingPrune) error {
 	if err = s.Guard.Check(); err != nil {
 		return err
 	}
-	if err = os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err = removeDurable(full); err != nil {
 		return err
 	}
 	if err = s.DoneJob("part:" + p.ID); err != nil {

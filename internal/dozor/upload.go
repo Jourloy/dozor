@@ -15,6 +15,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"time"
 )
 
@@ -151,7 +153,7 @@ func (s *Store) SetTarget(c S3Config) error {
 				}
 			}
 		}
-		if e = s.SaveEvent(ev); e != nil {
+		if e = s.saveEvent(ev, ev.Status == "closed"); e != nil {
 			return e
 		}
 		if ev.Status == "closed" {
@@ -229,10 +231,7 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 		// A portable manifest includes every part, including loss and gap information.
 		ev.Uploaded = !ev.Lost
 		rel = filepath.Join(eventDir(ev), "manifest.json")
-		if err = WriteJSON(filepath.Join(s.Root, rel), struct {
-			Event Event  `json:"event"`
-			Parts []Part `json:"parts"`
-		}{ev, parts}); err != nil {
+		if err = writeArchiveManifest(filepath.Join(s.Root, rel), ev, parts); err != nil {
 			return false, err
 		}
 		sha, md, size, e = HashFile(filepath.Join(s.Root, rel))
@@ -323,3 +322,23 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 }
 
 var _ io.ReadSeeker = (*rateReader)(nil)
+
+// Preserve an equivalent old manifest byte-for-byte, including its part order.
+// Receipts from older releases remain valid when tied timestamps change SQL order.
+func writeArchiveManifest(file string, ev Event, parts []Part) error {
+	type manifest struct {
+		Event Event  `json:"event"`
+		Parts []Part `json:"parts"`
+	}
+	var previous manifest
+	if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &previous) == nil && previous.Event == ev && len(previous.Parts) == len(parts) {
+		before := append([]Part(nil), previous.Parts...)
+		after := append([]Part(nil), parts...)
+		sort.Slice(before, func(i, j int) bool { return before[i].ID < before[j].ID })
+		sort.Slice(after, func(i, j int) bool { return after[i].ID < after[j].ID })
+		if reflect.DeepEqual(before, after) {
+			return nil
+		}
+	}
+	return WriteJSON(file, manifest{ev, parts})
+}

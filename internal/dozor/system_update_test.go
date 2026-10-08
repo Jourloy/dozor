@@ -88,7 +88,7 @@ func TestUpdateCommitsHelperAndPolicyBeforeStartup(t *testing.T) {
 	oldMask := syscall.Umask(0077)
 	defer syscall.Umask(oldMask)
 	must(t, u.Apply(context.Background(), release))
-	if starts != 1 || reloads != 1 {
+	if starts != 1 || reloads != 2 {
 		t.Fatalf("starts=%d reloads=%d", starts, reloads)
 	}
 	for _, unit := range []string{"dozor-recover.service", "dozor-rollback.service"} {
@@ -252,7 +252,9 @@ func TestSystemRecoveryRestoresAbsentFiles(t *testing.T) {
 	u, release := releaseFixture(t, "")
 	system := setupSystemFixture(t, u)
 	for _, path := range managedSystemFiles {
-		must(t, os.Remove(filepath.Join(system.Root, path)))
+		if err := os.Remove(filepath.Join(system.Root, path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
 	}
 	u.Healthy = func(context.Context, string) bool { return false }
 	if err := u.Apply(context.Background(), release); err == nil {

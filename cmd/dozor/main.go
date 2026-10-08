@@ -130,6 +130,7 @@ func hook() error {
 	f := flag.NewFlagSet("hook", flag.ContinueOnError)
 	socket := f.String("socket", "/run/dozor/control.sock", "control socket")
 	stream := f.String("stream", "", "stream state: online or offline")
+	archive := f.String("archive", "", "archive directory for durable completion notifications")
 	if e := f.Parse(os.Args[2:]); e != nil {
 		return e
 	}
@@ -145,6 +146,11 @@ func hook() error {
 		duration, e := strconv.ParseFloat(os.Getenv("MTX_SEGMENT_DURATION"), 64)
 		if e != nil {
 			return e
+		}
+		if *archive != "" {
+			if _, e = dozor.QueueSegment(*archive, os.Getenv("MTX_SEGMENT_PATH"), duration); e != nil {
+				return e
+			}
 		}
 		payload = map[string]any{"path": os.Getenv("MTX_SEGMENT_PATH"), "duration": duration}
 	}
@@ -165,6 +171,27 @@ func system() error {
 		return errors.New("system select-disk UUID | update | recover | integration")
 	}
 	switch os.Args[2] {
+	case "recover-catalog":
+		res, err := dozor.UnixClient("/run/dozor/control.sock").Post("http://unix/recover", "application/json", nil)
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 202 {
+			return fmt.Errorf("catalog recovery: HTTP %d", res.StatusCode)
+		}
+		fmt.Println("Восстановление каталога запущено в фоне")
+		return nil
+	case "catalog-protocol":
+		fmt.Println("1")
+		return nil
+	case "update-check":
+		return dozor.CheckUpdater(context.Background(), "/opt/dozor", "/etc/dozor/update.pub")
+	case "verify-update":
+		if len(os.Args) != 4 {
+			return errors.New("verify-update requires a fixture directory")
+		}
+		return dozor.VerifyUpdaterFixture(os.Args[3])
 	case "integration":
 		return dozor.PrintSystemIntegration(os.Stdout, version)
 	case "select-disk":

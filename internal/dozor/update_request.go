@@ -48,9 +48,8 @@ func readUpdateStatus(state string) updateStatus {
 }
 
 func (a *App) requestUpdate(w http.ResponseWriter, r *http.Request) {
-	// The updater consumes the request through the private API under this same
-	// lock. Even a simultaneous timer start sees the manual request before it
-	// decides whether auto_update permits this run.
+	// Persist the request before starting the independent updater. Older helpers
+	// consume it through the private API; newer helpers read the marker directly.
 	a.updateMu.Lock()
 	defer a.updateMu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

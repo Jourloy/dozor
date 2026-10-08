@@ -135,6 +135,9 @@ func mediaCommandError(ctx context.Context, tool string, err error, stderr *diag
 }
 
 func HashFile(path string) (sha, md string, size int64, err error) {
+	return hashFileContext(context.Background(), path)
+}
+func hashFileContext(ctx context.Context, path string) (sha, md string, size int64, err error) {
 	f, e := os.Open(path)
 	if e != nil {
 		err = e
@@ -143,14 +146,14 @@ func HashFile(path string) (sha, md string, size int64, err error) {
 	defer f.Close()
 	s := sha256.New()
 	m := md5.New()
-	size, err = io.Copy(io.MultiWriter(s, m), f)
+	size, err = io.Copy(io.MultiWriter(s, m), &contextReader{ctx: ctx, reader: f})
 	sha = hex.EncodeToString(s.Sum(nil))
 	md = base64.StdEncoding.EncodeToString(m.Sum(nil))
 	return
 }
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 func MediaConfig(c Config, b Binaries, socket string) ([]byte, error) {
-	hook := shellQuote(b.Self) + " hook --socket " + shellQuote(socket)
+	hook := shellQuote(b.Self) + " hook --socket " + shellQuote(socket) + " --archive " + shellQuote(c.Archive)
 	paths := map[string]any{}
 	for _, cam := range c.Cameras {
 		if !cam.Enabled {
@@ -256,6 +259,9 @@ func scanSegments(ctx context.Context, s *Store, probe string, recorderAlive boo
 		return e
 	}
 	for _, cam := range cams {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !cam.IsDir() || !safeID.MatchString(cam.Name()) {
 			continue
 		}
@@ -285,6 +291,9 @@ func scanCameraSegments(ctx context.Context, s *Store, probe, camera string, unt
 
 func scanSegmentFiles(ctx context.Context, s *Store, probe string, files []string, until int64, register func(Segment) error) error {
 	for _, path := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if until > 0 {
 			seg, err := ParseSegment(s.Root, path, 1)
 			if err != nil || seg.Start >= until {
@@ -312,6 +321,8 @@ func scanSegmentFiles(ctx context.Context, s *Store, probe string, files []strin
 
 // Video tool failures can be retried without taking a healthy archive offline.
 // Filesystem and catalog errors must still propagate as storage failures.
+var errStaleAssembly = errors.New("событие изменилось во время сборки")
+
 var errVideoAssembly = errors.New("не удалось собрать MP4")
 
 // Only input-data failures qualify for deletion. A missing executable, timeout,
@@ -373,7 +384,17 @@ func Assemble(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segmen
 		return p, e
 	}
 	partial := path + ".partial"
-	defer os.Remove(partial)
+	opID := "publish:" + p.ID
+	if e = s.queueFileOperation(opID, fileOperation{Kind: "assemble", Part: &p, Event: &ev, Cursor: ev.Cursor}); e != nil {
+		return p, e
+	}
+	publishing := false
+	defer func() {
+		if !publishing {
+			_ = removeDurable(partial)
+			_, _ = s.DB.Exec("DELETE FROM file_operations WHERE id=?", opID)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, b.FFmpeg, "-nostdin", "-v", "error", "-f", "concat", "-safe", "1", "-i", list.Name(), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", "-y", partial)
@@ -385,7 +406,7 @@ func Assemble(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segmen
 	if _, e = Probe(ctx, b.FFprobe, partial, false); e != nil {
 		return p, fmt.Errorf("%w: %w", errVideoAssembly, e)
 	}
-	p.SHA256, p.MD5, p.Size, e = HashFile(partial)
+	p.SHA256, p.MD5, p.Size, e = hashFileContext(ctx, partial)
 	if e != nil {
 		return p, e
 	}
@@ -398,21 +419,34 @@ func Assemble(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segmen
 	if e != nil {
 		return p, e
 	}
-	// Durable recovery descriptor precedes final publication.
-	if e = WriteJSON(path+".json", p); e != nil {
+	s.mutate.Lock()
+	defer s.mutate.Unlock()
+	current, err := s.Event(ev.ID)
+	if err != nil {
+		return p, err
+	}
+	if current.Cursor != ev.Cursor || current.Status == "closed" || current.End < ev.End {
+		return p, errStaleAssembly
+	}
+	if err = ctx.Err(); err != nil {
+		return p, err
+	}
+	publishing = true
+	if e = s.recordFileOperation(opID, fileOperation{Kind: "publish", Part: &p, Event: &ev, Cursor: ev.Cursor}); e != nil {
 		return p, e
 	}
-	if e = s.Guard.Check(); e != nil {
-		return p, e
-	}
-	if e = os.Rename(partial, path); e != nil {
-		return p, e
-	}
-	if e = s.SavePart(p); e != nil {
-		return p, e
-	}
-	if e = s.Enqueue("part", p.ID); e != nil {
-		return p, e
-	}
+
 	return p, nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(b []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(b)
 }
