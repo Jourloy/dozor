@@ -26,7 +26,7 @@ func TestRTSPDisconnect(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "dz-disconnect-")
 	must(t, err)
 	defer os.RemoveAll(dir)
-	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 	defer cancel()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	must(t, err)
@@ -100,7 +100,7 @@ func TestRTSPDisconnect(t *testing.T) {
 	pause(ctx, 1500*time.Millisecond)
 	disconnected := time.Now()
 	must(t, publisher.Process.Kill())
-	for ctx.Err() == nil && time.Since(disconnected) < 12*time.Second {
+	for ctx.Err() == nil && time.Since(disconnected) < 30*time.Second {
 		pause(ctx, 100*time.Millisecond)
 		a.mu.RLock()
 		r := a.runtime
@@ -108,10 +108,20 @@ func TestRTSPDisconnect(t *testing.T) {
 			a.mu.RUnlock()
 			continue
 		}
-		ev, err := r.Store.Event(eventID)
+		var ev Event
+		events, err := r.Store.Events(cam.ID, 10)
+		for _, candidate := range events {
+			if candidate.Source == disconnectSource {
+				ev = candidate
+			}
+		}
 		if err != nil || ev.Status != "closed" || ev.DisconnectedAt == 0 {
 			a.mu.RUnlock()
 			continue
+		}
+		if motion, err := r.Store.Event(eventID); err != nil || motion.DisconnectedAt != 0 {
+			a.mu.RUnlock()
+			t.Fatal("motion recording was labelled as the pre-outage clip", motion, err)
 		}
 		parts, err := r.Store.Parts(ev.ID)
 		state := r.streams[cam.ID].State
@@ -135,8 +145,8 @@ func TestRTSPDisconnect(t *testing.T) {
 		}
 		p, err := Probe(ctx, probe, filepath.Join(root, parts[len(parts)-1].Path), false)
 		must(t, err)
-		if p.Duration < 5 || p.Duration >= 60 {
-			t.Fatalf("short tail is not playable: %+v", p)
+		if len(parts) != 1 || p.Duration < 5 || p.Duration > 66 {
+			t.Fatalf("pre-outage clip is not one playable file: %+v %+v", parts, p)
 		}
 		foundOnline, foundOffline := false, false
 		for _, v := range h.Cameras[0].Intervals {
@@ -146,7 +156,7 @@ func TestRTSPDisconnect(t *testing.T) {
 		if !foundOnline || !foundOffline {
 			t.Fatal("missing online/offline history", h)
 		}
-		t.Logf("saved %.1fs MP4 %.1fs after disconnect, marked final part and persisted availability", p.Duration, time.Since(disconnected).Seconds())
+		t.Logf("saved %.1fs MP4 %.1fs after disconnect, saved the pre-outage clip and persisted availability", p.Duration, time.Since(disconnected).Seconds())
 		return
 	}
 	t.Fatal("disconnected recording did not close promptly", a.Status())

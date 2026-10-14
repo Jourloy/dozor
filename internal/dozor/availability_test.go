@@ -21,6 +21,27 @@ func recordingEngine(t *testing.T, s *Store) *Engine {
 	return e
 }
 
+// disconnectClip returns the camera's pre-outage recording, failing when it is missing.
+func disconnectClip(t *testing.T, s *Store, camera string) (Event, []Part) {
+	t.Helper()
+	events, err := s.Events(camera, 100)
+	must(t, err)
+	var clips []Event
+	for _, ev := range events {
+		if ev.Source == disconnectSource {
+			clips = append(clips, ev)
+		} else if ev.DisconnectedAt != 0 {
+			t.Fatal("a motion recording was labelled as the pre-outage clip", ev)
+		}
+	}
+	if len(clips) != 1 {
+		t.Fatalf("expected exactly one pre-outage clip, got %+v", clips)
+	}
+	parts, err := s.Parts(clips[0].ID)
+	must(t, err)
+	return clips[0], parts
+}
+
 func TestDisconnectFlushesShortTailAndSeparatesReconnection(t *testing.T) {
 	s := testStore(t)
 	e := recordingEngine(t, s)
@@ -34,7 +55,8 @@ func TestDisconnectFlushesShortTailAndSeparatesReconnection(t *testing.T) {
 	must(t, e.Tick(context.Background(), now))
 	events, err := s.Events(cam, 10)
 	must(t, err)
-	parts, err := s.Parts(events[0].ID)
+	motion := events[0]
+	parts, err := s.Parts(motion.ID)
 	must(t, err)
 	if len(parts) != 0 {
 		t.Fatal("tail should initially wait for more video")
@@ -43,12 +65,21 @@ func TestDisconnectFlushesShortTailAndSeparatesReconnection(t *testing.T) {
 	e.Signal(MotionSignal{CameraID: cam, Healthy: false, At: disconnect})
 	must(t, e.Disconnect(cam, disconnect))
 	must(t, e.Tick(context.Background(), disconnect))
-	ev, err := s.Event(events[0].ID)
+	ev, err := s.Event(motion.ID)
 	must(t, err)
 	parts, err = s.Parts(ev.ID)
 	must(t, err)
-	if ev.Status != "closed" || ev.End != disconnect.UnixMilli() || ev.DisconnectedAt != disconnect.UnixMilli() || len(parts) != 1 || parts[0].DisconnectedAt != ev.DisconnectedAt {
-		t.Fatalf("disconnect did not immediately save and mark the tail: %+v %+v", ev, parts)
+	if ev.Status != "closed" || ev.End != disconnect.UnixMilli() || ev.DisconnectedAt != 0 || len(parts) != 1 || parts[0].DisconnectedAt != 0 {
+		t.Fatalf("disconnect did not immediately save the motion tail: %+v %+v", ev, parts)
+	}
+	clip, clipParts := disconnectClip(t, s, cam)
+	if clip.Status != "open" || clip.DisconnectedAt != disconnect.UnixMilli() || clip.End != disconnect.UnixMilli() || len(clipParts) != 0 {
+		t.Fatalf("pre-outage clip should wait for the recorder's last file: %+v %+v", clip, clipParts)
+	}
+	must(t, e.Tick(context.Background(), disconnect.Add(13*time.Second)))
+	clip, clipParts = disconnectClip(t, s, cam)
+	if clip.Status != "closed" || len(clipParts) != 1 || clipParts[0].DisconnectedAt != disconnect.UnixMilli() || clipParts[0].Start != now.Add(-5*time.Second).UnixMilli() {
+		t.Fatalf("pre-outage clip was not saved from the buffer: %+v %+v", clip, clipParts)
 	}
 	otherEvents, err := s.Events(other, 10)
 	must(t, err)
@@ -58,7 +89,7 @@ func TestDisconnectFlushesShortTailAndSeparatesReconnection(t *testing.T) {
 	must(t, e.Tick(context.Background(), now.Add(30*time.Second)))
 	events, err = s.Events(cam, 10)
 	must(t, err)
-	if len(events) != 1 || events[0].End != ev.End {
+	if len(events) != 2 {
 		t.Fatal("detector failure extended the offline event", events)
 	}
 	e.SetOnline(cam, true)
@@ -66,12 +97,12 @@ func TestDisconnectFlushesShortTailAndSeparatesReconnection(t *testing.T) {
 	must(t, e.Tick(context.Background(), now.Add(31*time.Second)))
 	events, err = s.Events(cam, 10)
 	must(t, err)
-	if len(events) != 2 || events[0].ID == ev.ID || events[0].Start < disconnect.UnixMilli() || events[0].DisconnectedAt != 0 {
+	if len(events) != 3 || events[0].ID == ev.ID || events[0].Start < disconnect.UnixMilli() || events[0].DisconnectedAt != 0 {
 		t.Fatal("reconnection reused the interrupted recording", events)
 	}
 }
 
-func TestDisconnectDrainsAllPartsAndAcceptsLateCompletion(t *testing.T) {
+func TestDisconnectSavesLastBufferedMinuteAsOneClip(t *testing.T) {
 	s := testStore(t)
 	e := recordingEngine(t, s)
 	cam := ID()
@@ -88,62 +119,55 @@ func TestDisconnectDrainsAllPartsAndAcceptsLateCompletion(t *testing.T) {
 	must(t, err)
 	actual, err := s.Event(ev.ID)
 	must(t, err)
-	if len(parts) != 3 || actual.Status != "closed" || parts[0].DisconnectedAt != 0 || parts[1].DisconnectedAt != 0 || parts[2].DisconnectedAt != now.UnixMilli() {
-		t.Fatalf("did not drain/mark only the final part: %+v %+v", actual, parts)
+	if len(parts) != 3 || actual.Status != "closed" || actual.DisconnectedAt != 0 {
+		t.Fatalf("did not drain the motion recording: %+v %+v", actual, parts)
 	}
 	// The completion notification of the final five seconds arrives later.
 	last := Segment{Path: "late.mp4", CameraID: cam, Start: now.Add(-5 * time.Second).UnixMilli(), End: now.UnixMilli()}
 	must(t, e.AddSegment(last))
 	must(t, e.Tick(context.Background(), now.Add(time.Second)))
 	must(t, e.AddSegment(last)) // Duplicate hook must not duplicate video.
-	must(t, e.Tick(context.Background(), now.Add(2*time.Second)))
-	parts, err = s.Parts(ev.ID)
-	must(t, err)
-	actual, err = s.Event(ev.ID)
-	must(t, err)
-	if len(parts) != 4 || parts[2].DisconnectedAt != 0 || parts[3].DisconnectedAt != now.UnixMilli() || actual.Cursor != last.End || actual.Status != "closed" {
-		t.Fatalf("late tail was lost or mislabelled: %+v %+v", actual, parts)
+	must(t, e.Tick(context.Background(), now.Add(13*time.Second)))
+	clip, clipParts := disconnectClip(t, s, cam)
+	if clip.Status != "closed" || len(clipParts) != 1 || clipParts[0].Start != now.Add(-time.Minute).UnixMilli() || clipParts[0].End != last.End || clipParts[0].DisconnectedAt != now.UnixMilli() {
+		t.Fatalf("pre-outage minute was split, cut or mislabelled: %+v %+v", clip, clipParts)
 	}
 }
 
-func TestDisconnectMarksClosedRecordingAndRefreshesManifest(t *testing.T) {
+func TestDisconnectNeverLabelsOlderMotionRecording(t *testing.T) {
 	s := testStore(t)
 	e := recordingEngine(t, s)
-	now := time.Now().UnixMilli()
-	ev := Event{ID: ID(), CameraID: ID(), Start: now - 10000, End: now - 5000, Cursor: now - 5000, Status: "closed"}
-	must(t, s.SaveEvent(ev))
-	p := fixturePart(t, s, ev, ev.Start, ev.End)
-	remote := &memoryRemote{}
-	_, err := UploadOne(context.Background(), s, S3Config{}, remote)
-	must(t, err)
-	must(t, s.Enqueue("event", ev.ID))
-	remote.after = func() { must(t, e.Disconnect(ev.CameraID, time.UnixMilli(now))) }
-	_, err = UploadOne(context.Background(), s, S3Config{}, remote)
-	must(t, err)
-	actual, err := s.Event(ev.ID)
-	must(t, err)
-	if actual.Uploaded || s.QueueCount() != 1 {
-		t.Fatal("old in-flight manifest acknowledged the disconnect", actual)
+	cam := ID()
+	now := time.Now().Truncate(time.Second)
+	old := Event{ID: ID(), CameraID: cam, Start: now.Add(-time.Hour).UnixMilli(), End: now.Add(-59 * time.Minute).UnixMilli(), Cursor: now.Add(-59 * time.Minute).UnixMilli(), Status: "closed", Uploaded: true}
+	must(t, s.SaveEvent(old))
+	fixturePart(t, s, old, old.Start, old.End)
+	// Less than a minute was buffered: send whatever was recorded.
+	for i := 0; i < 4; i++ {
+		must(t, e.AddSegment(Segment{Path: itoa(i) + ".mp4", CameraID: cam, Start: now.Add(time.Duration(i-4) * 5 * time.Second).UnixMilli(), End: now.Add(time.Duration(i-3) * 5 * time.Second).UnixMilli()}))
 	}
-	remote.after = nil
-	_, err = UploadOne(context.Background(), s, S3Config{}, remote)
+	must(t, e.Disconnect(cam, now))
+	must(t, e.Tick(context.Background(), now.Add(13*time.Second)))
+	actual, err := s.Event(old.ID)
 	must(t, err)
-	var manifest struct {
-		Event Event
-		Parts []Part
+	if actual.DisconnectedAt != 0 || !actual.Uploaded {
+		t.Fatal("older motion recording was reported as the outage", actual)
 	}
-	data, err := os.ReadFile(filepath.Join(s.Root, eventDir(ev), "manifest.json"))
-	must(t, err)
-	must(t, json.Unmarshal(data, &manifest))
-	if manifest.Event.DisconnectedAt != now || len(manifest.Parts) != 1 || manifest.Parts[0].ID != p.ID || manifest.Parts[0].DisconnectedAt != now || s.QueueCount() != 0 {
-		t.Fatalf("manifest lost disconnect marker: %+v", manifest)
+	clip, parts := disconnectClip(t, s, cam)
+	if len(parts) != 1 || parts[0].Start != now.Add(-20*time.Second).UnixMilli() || parts[0].End != now.UnixMilli() || parts[0].DisconnectedAt != clip.DisconnectedAt {
+		t.Fatalf("short buffer was not saved: %+v %+v", clip, parts)
 	}
-	// Marker and history survive reopening the catalog.
 	must(t, s.Recover())
-	actual, err = s.Event(ev.ID)
+	if clip, _ = disconnectClip(t, s, cam); clip.DisconnectedAt != now.UnixMilli() {
+		t.Fatal("disconnect marker lost after recovery", clip)
+	}
+	// Nothing buffered (camera never delivered video): no clip, never an old one.
+	empty := ID()
+	must(t, e.Disconnect(empty, now))
+	events, err := s.Events(empty, 10)
 	must(t, err)
-	if actual.DisconnectedAt != now {
-		t.Fatal("disconnect marker lost after recovery", actual)
+	if len(events) != 0 {
+		t.Fatal("disconnect without buffered video created a recording", events)
 	}
 }
 
@@ -216,10 +240,11 @@ func TestAvailabilityWatchdogAndDelayedTail(t *testing.T) {
 	must(t, r.Engine.Tick(context.Background(), now.Add(5*time.Second)))
 	must(t, r.tickStreams(context.Background(), now.Add(26*time.Second)))
 	must(t, r.Engine.Tick(context.Background(), now.Add(26*time.Second)))
-	events, err = s.Events(cam.ID, 10)
-	must(t, err)
-	if r.streams[cam.ID].State != "offline" || events[0].Status != "closed" || events[0].DisconnectedAt == 0 {
-		t.Fatal("lost offline hook was not recovered", events)
+	if r.streams[cam.ID].State != "offline" {
+		t.Fatal("lost offline hook was not recovered")
+	}
+	if clip, _ := disconnectClip(t, s, cam.ID); clip.DisconnectedAt == 0 {
+		t.Fatal("lost offline hook did not save the pre-outage clip", clip)
 	}
 	must(t, r.Engine.AddSegment(Segment{Path: "tail.mp4", CameraID: cam.ID, Start: seg.End, End: seg.End + 5000}))
 	must(t, r.tickStreams(context.Background(), now.Add(27*time.Second)))
@@ -245,14 +270,12 @@ func TestDisablingCameraFlushesItsRecording(t *testing.T) {
 	must(t, r.Engine.Tick(context.Background(), now.Add(5*time.Second)))
 	cam.Enabled = false
 	must(t, r.finishDisabledStreams(context.Background(), []Camera{cam, other}, now.Add(6*time.Second)))
-	events, err := s.Events(cam.ID, 1)
-	must(t, err)
-	parts, err := s.Parts(events[0].ID)
-	must(t, err)
-	if events[0].Status != "closed" || len(parts) != 1 || parts[0].DisconnectedAt == 0 {
-		t.Fatal("disabled camera tail was not finalized", events, parts)
+	must(t, r.Engine.Tick(context.Background(), now.Add(20*time.Second)))
+	clip, parts := disconnectClip(t, s, cam.ID)
+	if clip.Status != "closed" || len(parts) != 1 || parts[0].DisconnectedAt == 0 {
+		t.Fatal("disabled camera tail was not finalized", clip, parts)
 	}
-	events, err = s.Events(other.ID, 1)
+	events, err := s.Events(other.ID, 1)
 	must(t, err)
 	if events[0].DisconnectedAt != 0 {
 		t.Fatal("configuration reload labelled another camera as disconnected", events)

@@ -38,6 +38,11 @@ type Engine struct {
 	assemble       func(context.Context, *Store, Binaries, Event, []Segment) (Part, error)
 }
 
+const (
+	disconnectSource       = "disconnect"
+	disconnectClipDuration = 60 * time.Second
+)
+
 type assemblyRetry struct {
 	next  time.Time
 	delay time.Duration
@@ -53,7 +58,9 @@ func (e *Engine) SetOnline(camera string, online bool) {
 	e.online[camera] = online
 }
 
-// Disconnect closes every pending window and marks only the latest recording.
+// Disconnect closes every pending window and saves the buffered minute before
+// the outage as its own recording. Only that recording carries the marker, so an
+// older motion clip is never reported as the moment the camera went offline.
 // A detector failure may still request continuous recording, but cannot extend
 // an event while its main stream is offline.
 func (e *Engine) Disconnect(camera string, at time.Time) error {
@@ -62,13 +69,10 @@ func (e *Engine) Disconnect(camera string, at time.Time) error {
 	e.Store.mutate.Lock()
 	defer e.Store.mutate.Unlock()
 	e.online[camera] = false
+	previous := e.disconnected[camera]
 	e.disconnected[camera] = at.UnixMilli()
 	delete(e.active, camera)
 	events, err := e.Store.PendingEvents()
-	if err != nil {
-		return err
-	}
-	latest, err := e.Store.Events(camera, 1)
 	if err != nil {
 		return err
 	}
@@ -76,31 +80,23 @@ func (e *Engine) Disconnect(camera string, at time.Time) error {
 		if ev.CameraID != camera {
 			continue
 		}
+		if ev.DisconnectedAt == at.UnixMilli() {
+			return nil
+		}
 		ev.End = max(ev.Start, min(ev.End, at.UnixMilli()))
 		ev.Status = "closing"
 		if err := e.Store.SaveEvent(ev); err != nil {
 			return err
 		}
 	}
-	if len(latest) == 0 {
-		return nil
-	}
-	ev, err := e.Store.Event(latest[0].ID)
-	if err != nil || ev.DisconnectedAt != 0 {
+	start := max(at.Add(-disconnectClipDuration).UnixMilli(), previous)
+	segs, err := e.Store.Segments(camera, start, at.UnixMilli())
+	if err != nil || len(segs) == 0 {
 		return err
 	}
-	ev.DisconnectedAt = at.UnixMilli()
-	ev.Uploaded = false
-	if err = e.Store.saveEvent(ev, ev.Status == "closed"); err != nil {
-		return err
-	}
-	if ev.Status == "closed" {
-		if err = e.markLastPart(ev); err != nil {
-			return err
-		}
-		return e.Store.Enqueue("event", ev.ID)
-	}
-	return nil
+	// Stays open briefly so the recorder can hand over the file it was writing.
+	ev := Event{ID: ID(), CameraID: camera, Source: disconnectSource, Start: start, Cursor: start, End: at.UnixMilli(), Status: "open", DisconnectedAt: at.UnixMilli()}
+	return e.Store.SaveEvent(ev)
 }
 
 func (e *Engine) markLastPart(ev Event) error {
@@ -281,12 +277,13 @@ eventsLoop:
 			selected := []Segment{}
 			for _, seg := range segs {
 				selected = append(selected, seg)
-				if seg.End-selected[0].Start >= 60000 {
+				// The pre-outage clip is one file, so its marker covers the whole minute.
+				if ev.Source != disconnectSource && seg.End-selected[0].Start >= 60000 {
 					break
 				}
 			}
 			duration := selected[len(selected)-1].End - selected[0].Start
-			if duration >= 60000 || expired {
+			if (duration >= 60000 && ev.Source != disconnectSource) || expired {
 				if ev.Cursor == ev.Start && selected[0].Start > ev.Start+1000 {
 					ev.ShortPrebuffer = true
 				}
