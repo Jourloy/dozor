@@ -9,6 +9,9 @@ import (
 const availabilityRetention = 24 * time.Hour
 const streamTimeout = 20 * time.Second
 
+// A stored end this far ahead of the boot clock is a past clock error, not the future.
+const restartClockTolerance = 10 * time.Minute
+
 type AvailabilityInterval struct {
 	Start int64  `json:"start"`
 	End   int64  `json:"end"`
@@ -57,6 +60,22 @@ func (s *Store) PruneAvailability(now time.Time) error {
 	return tx.Commit()
 }
 
+// Cuts a camera's history at now: rows straddling it end there, later rows go.
+func (s *Store) clipAvailability(camera string, now int64) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("UPDATE availability SET end=? WHERE camera=? AND end>? AND start<=?", now, camera, now, now); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("DELETE FROM availability WHERE camera=? AND start>?", camera, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) Availability(cameras []Camera, camera string, now time.Time) (AvailabilityHistory, error) {
 	h := AvailabilityHistory{Start: now.Add(-availabilityRetention).UnixMilli(), End: now.UnixMilli(), Cameras: []CameraAvailability{}}
 	for _, cam := range cameras {
@@ -64,6 +83,7 @@ func (s *Store) Availability(cameras []Camera, camera string, now time.Time) (Av
 			continue
 		}
 		row := CameraAvailability{CameraID: cam.ID, Name: cam.Name, Intervals: []AvailabilityInterval{}}
+		var prevEnd int64
 		rows, err := s.DB.Query("SELECT start,end,state FROM availability WHERE camera=? AND end>? AND start<? ORDER BY start", cam.ID, h.Start, h.End)
 		if err != nil {
 			return h, err
@@ -76,6 +96,14 @@ func (s *Store) Availability(cameras []Camera, camera string, now time.Time) (Av
 			}
 			interval.Start = max(interval.Start, h.Start)
 			interval.End = min(interval.End, h.End)
+			// Rows written before restart clamping existed may overlap; never serve overlaps.
+			if interval.Start < prevEnd {
+				interval.Start = prevEnd
+			}
+			if interval.End < interval.Start {
+				continue
+			}
+			prevEnd = interval.End
 			row.Intervals = append(row.Intervals, interval)
 		}
 		err = rows.Err()
@@ -96,7 +124,20 @@ func (r *Runtime) initStreams(cameras []Camera, now time.Time) error {
 		if !cam.Enabled {
 			state = "disabled"
 		}
-		v := AvailabilityInterval{Start: now.UnixMilli(), End: now.UnixMilli(), State: state}
+		// A restart with a clock behind the previous run must not open before its last row ended.
+		var maxEnd int64
+		if err := r.Store.DB.QueryRow("SELECT COALESCE(MAX(end),0) FROM availability WHERE camera=?", cam.ID).Scan(&maxEnd); err != nil {
+			return err
+		}
+		// Beyond the tolerance the tail is a past clock error: clip it instead of waiting it out.
+		if maxEnd > now.Add(restartClockTolerance).UnixMilli() {
+			if err := r.Store.clipAvailability(cam.ID, now.UnixMilli()); err != nil {
+				return err
+			}
+			maxEnd = 0
+		}
+		start := max(now.UnixMilli(), maxEnd)
+		v := AvailabilityInterval{Start: start, End: start, State: state}
 		r.streams[cam.ID] = v
 		r.Engine.SetOnline(cam.ID, false)
 		if err := r.Store.SaveAvailability(cam.ID, v); err != nil {
@@ -183,7 +224,7 @@ func (r *Runtime) tickStreams(ctx context.Context, now time.Time) error {
 			}
 		}
 		state = r.streams[camera]
-		state.End = now.UnixMilli()
+		state.End = max(now.UnixMilli(), state.Start) // lagging clock: never save End < Start
 		if err := r.Store.SaveAvailability(camera, state); err != nil {
 			return err
 		}

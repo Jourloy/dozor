@@ -395,3 +395,153 @@ func TestAvailabilityAPIAndPrivateStreamHook(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
+
+func TestInitStreamsStartsAfterStoredHistory(t *testing.T) {
+	s := testStore(t)
+	cam, fresh := Camera{ID: ID(), Enabled: true}, Camera{ID: ID(), Enabled: true}
+	now := time.Now().Truncate(time.Second)
+	r := &Runtime{Store: s, Engine: recordingEngine(t, s)}
+	must(t, r.initStreams([]Camera{cam}, now))
+	r.mediaSince.Store(now.Unix())
+	r.streamSignals <- StreamSignal{CameraID: cam.ID, Online: true, At: now.UnixMilli()}
+	must(t, r.tickStreams(context.Background(), now.Add(10*time.Second)))
+	end := now.Add(10 * time.Second).UnixMilli()
+
+	r2 := &Runtime{Store: s, Engine: recordingEngine(t, s)}
+	must(t, r2.initStreams([]Camera{cam, fresh}, now.Add(5*time.Second)))
+	if v := r2.streams[cam.ID]; v.Start != end || v.End != end || v.State != "offline" {
+		t.Fatalf("restart with lagging clock opened at wrong time: %+v", v)
+	}
+	if v := r2.streams[fresh.ID]; v.Start != now.Add(5*time.Second).UnixMilli() {
+		t.Fatalf("camera without history must start at now: %+v", v)
+	}
+	h, err := s.Availability([]Camera{cam}, "", now.Add(20*time.Second))
+	must(t, err)
+	// The online row keeps its end; the restart opens exactly where it ended.
+	iv := h.Cameras[0].Intervals
+	if len(iv) != 2 || iv[0] != (AvailabilityInterval{Start: now.UnixMilli(), End: end, State: "online"}) || iv[1] != (AvailabilityInterval{Start: end, End: end, State: "offline"}) {
+		t.Fatalf("unexpected intervals after restart: %+v", iv)
+	}
+
+	r3 := &Runtime{Store: s, Engine: recordingEngine(t, s)}
+	later := now.Add(30 * time.Second)
+	must(t, r3.initStreams([]Camera{cam}, later))
+	if v := r3.streams[cam.ID]; v.Start != later.UnixMilli() {
+		t.Fatalf("restart with clock ahead must leave a gap: %+v", v)
+	}
+}
+
+func TestTickStreamsNeverSavesNegativeInterval(t *testing.T) {
+	s := testStore(t)
+	cam := Camera{ID: ID(), Enabled: true}
+	now := time.Now().Truncate(time.Second)
+	future := now.Add(time.Minute).UnixMilli()
+	must(t, s.SaveAvailability(cam.ID, AvailabilityInterval{Start: now.UnixMilli(), End: future, State: "online"}))
+	r := &Runtime{Store: s, Engine: recordingEngine(t, s)}
+	must(t, r.initStreams([]Camera{cam}, now))
+	if r.streams[cam.ID].Start != future {
+		t.Fatalf("stream did not start after stored history: %+v", r.streams[cam.ID])
+	}
+	end := func() int64 {
+		var e int64
+		must(t, s.DB.QueryRow("SELECT end FROM availability WHERE camera=? AND start=?", cam.ID, future).Scan(&e))
+		return e
+	}
+	must(t, r.tickStreams(context.Background(), now.Add(time.Second)))
+	if e := end(); e != future {
+		t.Fatalf("lagging clock saved end=%d, want %d", e, future)
+	}
+	must(t, r.tickStreams(context.Background(), now.Add(2*time.Minute)))
+	if e := end(); e != now.Add(2*time.Minute).UnixMilli() {
+		t.Fatalf("interval did not grow after clock passed start: end=%d", e)
+	}
+}
+
+func TestAvailabilityServesOverlappingRowsClamped(t *testing.T) {
+	s := testStore(t)
+	cam, clean := Camera{ID: ID(), Enabled: true}, Camera{ID: ID(), Enabled: true}
+	now := time.Now().Truncate(time.Second)
+	base := now.Add(-time.Hour).UnixMilli()
+	at := func(sec int64) int64 { return base + sec*1000 }
+	for _, v := range []AvailabilityInterval{
+		{Start: base, End: at(50), State: "online"},
+		{Start: at(49), End: at(120), State: "offline"},
+		{Start: at(60), End: at(70), State: "online"},
+		{Start: at(120), End: at(120), State: "offline"},
+		{Start: at(130), End: at(140), State: "online"},
+	} {
+		must(t, s.SaveAvailability(cam.ID, v))
+	}
+	must(t, s.SaveAvailability(clean.ID, AvailabilityInterval{Start: at(10), End: at(20), State: "online"}))
+	h, err := s.Availability([]Camera{cam, clean}, "", now)
+	must(t, err)
+	want := []AvailabilityInterval{
+		{Start: base, End: at(50), State: "online"},
+		{Start: at(50), End: at(120), State: "offline"},
+		{Start: at(120), End: at(120), State: "offline"},
+		{Start: at(130), End: at(140), State: "online"},
+	}
+	got := h.Cameras[0].Intervals
+	if len(got) != len(want) {
+		t.Fatalf("unexpected intervals: %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("interval %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if c := h.Cameras[1].Intervals; len(c) != 1 || c[0] != (AvailabilityInterval{Start: at(10), End: at(20), State: "online"}) {
+		t.Fatalf("clean camera changed: %+v", c)
+	}
+}
+
+func TestInitStreamsClipsStoredTailFarAhead(t *testing.T) {
+	s := testStore(t)
+	cam, other := Camera{ID: ID(), Enabled: true}, Camera{ID: ID(), Enabled: true}
+	now := time.Now().Truncate(time.Second)
+	nowMs := now.UnixMilli()
+	for _, v := range []AvailabilityInterval{
+		{Start: now.Add(-time.Hour).UnixMilli(), End: now.Add(time.Hour).UnixMilli(), State: "online"},
+		{Start: now.Add(2 * time.Hour).UnixMilli(), End: now.Add(3 * time.Hour).UnixMilli(), State: "offline"},
+	} {
+		must(t, s.SaveAvailability(cam.ID, v))
+	}
+	must(t, s.SaveAvailability(other.ID, AvailabilityInterval{Start: now.Add(-time.Hour).UnixMilli(), End: now.Add(time.Minute).UnixMilli(), State: "online"}))
+	r := &Runtime{Store: s, Engine: recordingEngine(t, s)}
+	must(t, r.initStreams([]Camera{cam, other}, now))
+	if v := r.streams[cam.ID]; v != (AvailabilityInterval{Start: nowMs, End: nowMs, State: "offline"}) {
+		t.Fatalf("far-ahead tail was not clipped to now: %+v", v)
+	}
+	if v := r.streams[other.ID]; v.Start != now.Add(time.Minute).UnixMilli() {
+		t.Fatalf("tail inside tolerance must still be waited out: %+v", v)
+	}
+	var n int
+	must(t, s.DB.QueryRow("SELECT count(*) FROM availability WHERE camera=? AND end>?", cam.ID, nowMs).Scan(&n))
+	if n != 0 {
+		t.Fatalf("%d rows still end after now", n)
+	}
+	var end int64
+	must(t, s.DB.QueryRow("SELECT end FROM availability WHERE camera=? AND start=?", cam.ID, now.Add(-time.Hour).UnixMilli()).Scan(&end))
+	if end != nowMs {
+		t.Fatalf("straddling row end=%d, want %d", end, nowMs)
+	}
+	must(t, s.DB.QueryRow("SELECT count(*) FROM availability WHERE camera=? AND start=?", cam.ID, now.Add(2*time.Hour).UnixMilli()).Scan(&n))
+	if n != 0 {
+		t.Fatal("future row was not deleted")
+	}
+	h, err := s.Availability([]Camera{cam, other}, "", now.Add(time.Minute))
+	must(t, err)
+	got := h.Cameras[0].Intervals
+	if len(got) != 2 || got[0] != (AvailabilityInterval{Start: now.Add(-time.Hour).UnixMilli(), End: nowMs, State: "online"}) || got[1] != (AvailabilityInterval{Start: nowMs, End: nowMs, State: "offline"}) {
+		t.Fatalf("unexpected intervals for clipped camera: %+v", got)
+	}
+	if got = h.Cameras[1].Intervals; len(got) != 1 || got[0] != (AvailabilityInterval{Start: now.Add(-time.Hour).UnixMilli(), End: now.Add(time.Minute).UnixMilli(), State: "online"}) {
+		t.Fatalf("unexpected intervals for camera inside tolerance: %+v", got)
+	}
+	r.mediaSince.Store(now.Unix())
+	must(t, r.tickStreams(context.Background(), now.Add(time.Second)))
+	must(t, s.DB.QueryRow("SELECT end FROM availability WHERE camera=? AND start=?", cam.ID, nowMs).Scan(&end))
+	if end != now.Add(time.Second).UnixMilli() {
+		t.Fatalf("tick after clip saved end=%d", end)
+	}
+}
