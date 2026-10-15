@@ -162,6 +162,13 @@ func (s *Store) applyFileOperationContext(ctx context.Context, id string) error 
 		if err := WriteJSON(filepath.Join(s.Root, eventDir(*op.Event), "event.json"), op.Event); err != nil {
 			return err
 		}
+	case "delete_event":
+		if op.Event == nil {
+			return errors.New("invalid event deletion")
+		}
+		if err := removeEventDirectory(s.Root, *op.Event); err != nil {
+			return err
+		}
 	case "part":
 		if op.Part == nil {
 			return errors.New("invalid part operation")

@@ -90,6 +90,10 @@ func TestManifestReceiptAllowsRevisionsAndDoesNotAcknowledgeFailures(t *testing.
 	must(t, s.SetTarget(cfg))
 	ev := Event{ID: ID(), CameraID: ID(), Start: 1000, End: 9000, Cursor: 9000, Status: "closed", Lost: true}
 	must(t, s.SaveEvent(ev))
+	// An event without any video is never published, so keep one acknowledged part.
+	part := fixturePart(t, s, ev, 1000, 9000)
+	part.Uploaded = true
+	must(t, s.SavePart(part))
 	must(t, s.Enqueue("event", ev.ID))
 	remote := &memoryRemote{fail: true}
 	_, err := UploadOne(context.Background(), s, cfg, remote)

@@ -228,6 +228,10 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 		if pending {
 			return false, s.Retry(j, "ожидание частей")
 		}
+		// Cleanup removes an event without video; a late tail enqueues it again.
+		if !eventHasVideo(parts) {
+			return true, s.DoneJob(j.ID)
+		}
 		// A portable manifest includes every part, including loss and gap information.
 		ev.Uploaded = !ev.Lost
 		rel = filepath.Join(eventDir(ev), "manifest.json")

@@ -497,6 +497,11 @@ func (a *App) runArchive(ctx context.Context, r *Runtime) {
 			r.reportArchiveError("Ошибка обработки архива; повтор будет выполнен", err, time.Now())
 		}
 		iteration++
+		if iteration%300 == 1 {
+			if _, err := r.Store.CleanupEmptyEvents(time.Now()); err != nil && ctx.Err() == nil {
+				r.reportArchiveError("Не удалось удалить события без видео", err, time.Now())
+			}
+		}
 		if iteration%15 == 0 {
 			if !a.Development {
 				if err := r.Store.PruneArchive(time.Now(), a.storage.Get(), func() (uint64, uint64, error) { return DiskUsage(r.Store.Root) }); err != nil {
