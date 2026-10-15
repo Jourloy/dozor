@@ -3,12 +3,13 @@ package dozor
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
+	"net/textproto"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -18,16 +19,18 @@ import (
 	"time"
 )
 
-// A camera on DHCP can come back at another address. While a camera is online
-// Dozor remembers the MAC behind its IP; once it has been offline for a while,
-// Dozor sweeps the Pi's own subnet and moves the camera to the IP that now
-// carries that MAC. Only cameras configured by an IP on a directly connected
-// subnet take part: behind a router the ARP table shows the router's MAC.
+// A camera on DHCP can come back at another address. Once a camera has been
+// offline for a while, Dozor sweeps its subnet for hosts that accept the
+// camera's RTSP path with its login and password, and moves the camera there.
+// MAC addresses are not used: mesh nodes may bridge or proxy them. When
+// several hosts accept the same login, the ONVIF serial number remembered
+// while the camera was online tells them apart.
 const (
 	relocateAfter    = 2 * time.Minute
 	relocateRetry    = 5 * time.Minute
 	relocateTick     = 30 * time.Second
 	relocateDial     = 800 * time.Millisecond
+	relocateRTSP     = 4 * time.Second
 	relocateWorkers  = 64
 	relocateMaxHosts = 1024
 )
@@ -38,17 +41,20 @@ type CameraMove struct {
 
 type relocator struct {
 	path    string
-	macs    map[string]string // camera ID -> MAC seen while it was online
+	serials map[string]string // camera ID -> ONVIF serial seen while online
 	tried   map[string]time.Time
-	arp     func() (map[string]string, error)
+	asked   map[string]time.Time
+	warned  map[string]int64 // offline start already reported as ambiguous
 	subnets func() ([]*net.IPNet, error)
-	dial    func(ctx context.Context, address string) bool
+	open    func(ctx context.Context, address string) bool
+	accepts func(ctx context.Context, cam Camera) bool
+	serial  func(ctx context.Context, cam Camera) (string, error)
 }
 
 func newRelocator(path string) *relocator {
-	l := &relocator{path: path, macs: map[string]string{}, tried: map[string]time.Time{}, arp: readARP, subnets: localSubnets, dial: dialTCP}
+	l := &relocator{path: path, serials: map[string]string{}, tried: map[string]time.Time{}, asked: map[string]time.Time{}, warned: map[string]int64{}, subnets: localSubnets, open: dialTCP, accepts: rtspAccepts, serial: onvifSerial}
 	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &l.macs)
+		_ = json.Unmarshal(b, &l.serials)
 	}
 	return l
 }
@@ -57,7 +63,7 @@ func (a *App) runRelocation(ctx context.Context) {
 	if a.Development {
 		return
 	}
-	l := newRelocator(filepath.Join(a.StateDir, "camera-macs.json"))
+	l := newRelocator(filepath.Join(a.StateDir, "camera-serials.json"))
 	for pause(ctx, relocateTick) {
 		a.mu.RLock()
 		r := a.runtime
@@ -65,7 +71,10 @@ func (a *App) runRelocation(ctx context.Context) {
 		if r == nil || r.mediaSince.Load() == 0 {
 			continue
 		}
-		moves := l.step(ctx, a.Config.Get().Cameras, r.streamSnapshot(), time.Now())
+		moves, ambiguous := l.step(ctx, a.Config.Get().Cameras, r.streamSnapshot(), time.Now())
+		for _, name := range ambiguous {
+			r.Store.Notice(fmt.Sprintf("Камера «%s» не отвечает по своему адресу, а её логин подходит к нескольким камерам в сети; укажите новый адрес вручную", name))
+		}
 		if len(moves) == 0 {
 			continue
 		}
@@ -87,107 +96,98 @@ func (a *App) runRelocation(ctx context.Context) {
 	}
 }
 
-func (l *relocator) step(ctx context.Context, cameras []Camera, streams map[string]AvailabilityInterval, now time.Time) []CameraMove {
-	table, err := l.arp()
-	if err != nil {
-		return nil
-	}
-	nets, err := l.subnets()
-	if err != nil {
-		return nil
+func (l *relocator) step(ctx context.Context, cameras []Camera, streams map[string]AvailabilityInterval, now time.Time) (moves []CameraMove, ambiguous []string) {
+	nets, _ := l.subnets()
+	taken := map[string]bool{}
+	for _, cam := range cameras {
+		if ip := cameraIP(cam); ip != nil {
+			taken[ip.String()] = true
+		}
 	}
 	learned := false
 	lost := []Camera{}
 	for _, cam := range cameras {
 		ip := cameraIP(cam)
 		state, ok := streams[cam.ID]
-		if !cam.Enabled || ip == nil || !ok || subnetOf(nets, ip) == nil {
+		if !cam.Enabled || ip == nil || !ok {
 			continue
 		}
 		switch {
 		case state.State == "online":
 			delete(l.tried, cam.ID)
-			if mac := table[ip.String()]; mac != "" && l.macs[cam.ID] != mac {
-				l.macs[cam.ID] = mac
-				learned = true
+			if cam.ONVIF != "" && l.serials[cam.ID] == "" && now.Sub(l.asked[cam.ID]) >= relocateRetry {
+				l.asked[cam.ID] = now
+				if s, err := l.serial(ctx, cam); err == nil && s != "" {
+					l.serials[cam.ID] = s
+					learned = true
+				}
 			}
-		case state.State == "offline" && l.macs[cam.ID] != "" &&
-			now.Sub(time.UnixMilli(state.Start)) >= relocateAfter && now.Sub(l.tried[cam.ID]) >= relocateRetry:
+		case state.State == "offline" && now.Sub(time.UnixMilli(state.Start)) >= relocateAfter && now.Sub(l.tried[cam.ID]) >= relocateRetry:
 			lost = append(lost, cam)
 		}
 	}
 	if learned {
 		l.save(cameras)
 	}
-	if len(lost) == 0 {
-		return nil
-	}
-	hosts := map[string]bool{}
 	for _, cam := range lost {
 		l.tried[cam.ID] = now
-		for _, h := range sweepHosts(subnetOf(nets, cameraIP(cam)), cameraIP(cam), nets) {
-			hosts[h] = true
+		old := cameraIP(cam).String()
+		if l.accepts(ctx, cam) {
+			continue // Still at its address: the stream fails for another reason.
 		}
-	}
-	answered := map[string]bool{}
-	ports := map[string]bool{}
-	for _, cam := range lost {
-		ports[rtspPort(cam)] = true
-	}
-	for port := range ports {
-		for h := range l.sweep(ctx, hosts, port) {
-			answered[h] = true
-		}
-	}
-	if table, err = l.arp(); err != nil {
-		return nil
-	}
-	moves := []CameraMove{}
-	for _, cam := range lost {
-		mac, old := l.macs[cam.ID], cameraIP(cam).String()
-		if table[old] == mac || sharedMAC(l.macs, cam.ID) {
-			continue // Still at its address (a stream fault), or MAC is ambiguous.
-		}
-		candidates, open := []string{}, []string{}
-		for ip, m := range table {
-			if m == mac && ip != old {
-				candidates = append(candidates, ip)
-				if answered[ip] {
-					open = append(open, ip)
-				}
+		hosts := []string{}
+		for _, h := range sweepHosts(cameraIP(cam), nets) {
+			if !taken[h] {
+				hosts = append(hosts, h)
 			}
 		}
-		if len(open) > 0 {
-			candidates = open
+		candidates := []string{}
+		for _, h := range l.sweep(ctx, hosts, rtspPort(cam)) {
+			if l.accepts(ctx, movedCamera(cam, old, h)) {
+				candidates = append(candidates, h)
+			}
 		}
-		if len(candidates) == 1 {
+		if len(candidates) > 1 && l.serials[cam.ID] != "" {
+			same := []string{}
+			for _, h := range candidates {
+				if s, err := l.serial(ctx, movedCamera(cam, old, h)); err == nil && s == l.serials[cam.ID] {
+					same = append(same, h)
+				}
+			}
+			candidates = same
+		}
+		switch {
+		case len(candidates) == 1:
 			moves = append(moves, CameraMove{ID: cam.ID, Name: cam.Name, From: old, To: candidates[0]})
+			taken[candidates[0]] = true
+		case len(candidates) > 1 && l.warned[cam.ID] != streams[cam.ID].Start:
+			l.warned[cam.ID] = streams[cam.ID].Start
+			ambiguous = append(ambiguous, cam.Name)
 		}
 	}
-	return moves
+	return moves, ambiguous
 }
 
-// Connecting to every host makes the kernel resolve its MAC, even when the
-// port is closed. Hosts that accept the RTSP port are reported back.
-func (l *relocator) sweep(ctx context.Context, hosts map[string]bool, port string) map[string]bool {
+// Hosts that accept a TCP connection on the RTSP port.
+func (l *relocator) sweep(ctx context.Context, hosts []string, port string) []string {
 	jobs := make(chan string)
 	var mu sync.Mutex
-	answered := map[string]bool{}
+	open := []string{}
 	var wg sync.WaitGroup
 	for range relocateWorkers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for h := range jobs {
-				if l.dial(ctx, net.JoinHostPort(h, port)) {
+				if l.open(ctx, net.JoinHostPort(h, port)) {
 					mu.Lock()
-					answered[h] = true
+					open = append(open, h)
 					mu.Unlock()
 				}
 			}
 		}()
 	}
-	for h := range hosts {
+	for _, h := range hosts {
 		if ctx.Err() != nil {
 			break
 		}
@@ -195,7 +195,7 @@ func (l *relocator) sweep(ctx context.Context, hosts map[string]bool, port strin
 	}
 	close(jobs)
 	wg.Wait()
-	return answered
+	return open
 }
 
 func (l *relocator) save(cameras []Camera) {
@@ -203,35 +203,30 @@ func (l *relocator) save(cameras []Camera) {
 	for _, cam := range cameras {
 		known[cam.ID] = true
 	}
-	for id := range l.macs {
+	for id := range l.serials {
 		if !known[id] {
-			delete(l.macs, id)
+			delete(l.serials, id)
 		}
 	}
-	_ = WriteJSON(l.path, l.macs)
+	_ = WriteJSON(l.path, l.serials)
 }
 
-func sharedMAC(macs map[string]string, id string) bool {
-	for other, mac := range macs {
-		if other != id && mac == macs[id] {
-			return true
-		}
-	}
-	return false
+func movedCamera(cam Camera, from, to string) Camera {
+	cam.URL = replaceHost(cam.URL, from, to)
+	cam.SubURL = replaceHost(cam.SubURL, from, to)
+	cam.ONVIF = replaceHost(cam.ONVIF, from, to)
+	return cam
 }
 
 func applyCameraMoves(c *Config, moves []CameraMove) []CameraMove {
 	applied := []CameraMove{}
 	for _, m := range moves {
 		for i := range c.Cameras {
-			cam := &c.Cameras[i]
 			// The user may have edited the camera while the sweep ran.
-			if cam.ID != m.ID || cameraIP(*cam) == nil || cameraIP(*cam).String() != m.From {
+			if c.Cameras[i].ID != m.ID || cameraIP(c.Cameras[i]) == nil || cameraIP(c.Cameras[i]).String() != m.From {
 				continue
 			}
-			cam.URL = replaceHost(cam.URL, m.From, m.To)
-			cam.SubURL = replaceHost(cam.SubURL, m.From, m.To)
-			cam.ONVIF = replaceHost(cam.ONVIF, m.From, m.To)
+			c.Cameras[i] = movedCamera(c.Cameras[i], m.From, m.To)
 			applied = append(applied, m)
 		}
 	}
@@ -251,6 +246,7 @@ func replaceHost(raw, from, to string) string {
 	return u.String()
 }
 
+// Cameras addressed by a host name are left to DNS.
 func cameraIP(cam Camera) net.IP {
 	u, err := url.Parse(cam.URL)
 	if err != nil {
@@ -266,34 +262,22 @@ func rtspPort(cam Camera) string {
 	return "554"
 }
 
-func subnetOf(nets []*net.IPNet, ip net.IP) *net.IPNet {
-	for _, n := range nets {
-		if n.Contains(ip) {
-			return n
+// The Pi's subnet that holds the camera, or the camera's /24 when the camera
+// sits elsewhere. Subnets wider than /22 are narrowed to the camera's /24.
+// The network, broadcast and Pi's own addresses are skipped.
+func sweepHosts(ip net.IP, own []*net.IPNet) []string {
+	n := &net.IPNet{IP: ip.Mask(net.CIDRMask(24, 32)), Mask: net.CIDRMask(24, 32)}
+	for _, o := range own {
+		if ones, bits := o.Mask.Size(); bits == 32 && ones <= 30 && o.Contains(ip) && 1<<(bits-ones) <= relocateMaxHosts {
+			n = &net.IPNet{IP: o.IP.Mask(o.Mask), Mask: o.Mask}
 		}
-	}
-	return nil
-}
-
-// Hosts of the camera's subnet, without the network, broadcast and Pi's own
-// addresses. A subnet wider than /22 is narrowed to the camera's /24.
-func sweepHosts(n *net.IPNet, ip net.IP, own []*net.IPNet) []string {
-	if n == nil {
-		return nil
-	}
-	ones, bits := n.Mask.Size()
-	if bits != 32 || ones > 30 {
-		return nil
-	}
-	if 1<<(bits-ones) > relocateMaxHosts {
-		n = &net.IPNet{IP: ip.Mask(net.CIDRMask(24, 32)), Mask: net.CIDRMask(24, 32)}
-		ones = 24
 	}
 	self := map[string]bool{}
 	for _, o := range own {
 		self[o.IP.String()] = true
 	}
-	base := binary.BigEndian.Uint32(n.IP.To4().Mask(n.Mask))
+	ones, _ := n.Mask.Size()
+	base := binary.BigEndian.Uint32(n.IP.To4())
 	size := uint32(1) << (32 - ones)
 	hosts := []string{}
 	for i := uint32(1); i < size-1; i++ {
@@ -329,35 +313,6 @@ func localSubnets() ([]*net.IPNet, error) {
 	return nets, nil
 }
 
-func readARP() (map[string]string, error) {
-	f, err := os.Open("/proc/net/arp")
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return parseARP(f)
-}
-
-// Only complete entries count: a host that never answered stays as zeros.
-func parseARP(r io.Reader) (map[string]string, error) {
-	table := map[string]string{}
-	s := bufio.NewScanner(r)
-	s.Scan()
-	for s.Scan() {
-		f := strings.Fields(s.Text())
-		if len(f) < 4 {
-			continue
-		}
-		flags, err := strconv.ParseUint(strings.TrimPrefix(f[2], "0x"), 16, 32)
-		mac := strings.ToLower(f[3])
-		if err != nil || flags&0x2 == 0 || mac == "00:00:00:00:00:00" {
-			continue
-		}
-		table[f[0]] = mac
-	}
-	return table, s.Err()
-}
-
 func dialTCP(ctx context.Context, address string) bool {
 	conn, err := (&net.Dialer{Timeout: relocateDial}).DialContext(ctx, "tcp", address)
 	if err != nil {
@@ -365,4 +320,98 @@ func dialTCP(ctx context.Context, address string) bool {
 	}
 	conn.Close()
 	return true
+}
+
+// rtspAccepts sends DESCRIBE for the camera's main stream and reports whether
+// the host serves that path to the camera's login.
+func rtspAccepts(ctx context.Context, cam Camera) bool {
+	u, err := url.Parse(cam.URL)
+	if err != nil {
+		return false
+	}
+	address := u.Host
+	if u.Port() == "" {
+		address = net.JoinHostPort(u.Hostname(), "554")
+	}
+	ctx, cancel := context.WithTimeout(ctx, relocateRTSP)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	if d, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(d)
+	}
+	r := textproto.NewReader(bufio.NewReader(conn))
+	target := u.String()
+	auth := ""
+	for seq := 1; seq <= 2; seq++ {
+		req := fmt.Sprintf("DESCRIBE %s RTSP/1.0\r\nCSeq: %d\r\nAccept: application/sdp\r\nUser-Agent: Dozor\r\n", target, seq)
+		if auth != "" {
+			req += "Authorization: " + auth + "\r\n"
+		}
+		if _, err = conn.Write([]byte(req + "\r\n")); err != nil {
+			return false
+		}
+		status, headers, err := readRTSPResponse(r)
+		if err != nil {
+			return false
+		}
+		if status == 200 {
+			return true
+		}
+		if status != 401 || seq == 2 || cam.Username == "" {
+			return false
+		}
+		auth = ""
+		for _, challenge := range headers.Values("Www-Authenticate") {
+			if strings.HasPrefix(challenge, "Digest ") {
+				auth, _ = digestAuth(challenge, "DESCRIBE", target, cam.Username, cam.Password)
+				break
+			}
+			if strings.HasPrefix(challenge, "Basic ") {
+				auth = "Basic " + base64.StdEncoding.EncodeToString([]byte(cam.Username+":"+cam.Password))
+			}
+		}
+		if auth == "" {
+			return false
+		}
+	}
+	return false
+}
+
+func readRTSPResponse(r *textproto.Reader) (int, textproto.MIMEHeader, error) {
+	line, err := r.ReadLine()
+	if err != nil {
+		return 0, nil, err
+	}
+	f := strings.Fields(line)
+	if len(f) < 2 || !strings.HasPrefix(f[0], "RTSP/") {
+		return 0, nil, fmt.Errorf("not RTSP")
+	}
+	status, err := strconv.Atoi(f[1])
+	if err != nil {
+		return 0, nil, err
+	}
+	headers, err := r.ReadMIMEHeader()
+	if err != nil {
+		return 0, nil, err
+	}
+	if n, _ := strconv.Atoi(headers.Get("Content-Length")); n > 0 && n < 1<<20 {
+		if _, err = r.R.Discard(n); err != nil {
+			return 0, nil, err
+		}
+	}
+	return status, headers, nil
+}
+
+func onvifSerial(ctx context.Context, cam Camera) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	n, err := soap(ctx, cam, cam.ONVIF, "http://www.onvif.org/ver10/device/wsdl/GetDeviceInformation", `<GetDeviceInformation xmlns="http://www.onvif.org/ver10/device/wsdl"/>`)
+	if err != nil {
+		return "", err
+	}
+	return n.text("SerialNumber"), nil
 }
