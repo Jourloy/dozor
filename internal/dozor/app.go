@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,11 +34,26 @@ type Runtime struct {
 	streams           map[string]AvailabilityInterval
 	streamSignals     chan StreamSignal
 	archiveMu         sync.Mutex
-	archiveError      string
-	archiveNotice     time.Time
+	archiveNotices    map[string]archiveNotice
 	diagnosticMu      sync.Mutex
 	diagnosticNotices map[string]CameraFailure
 }
+
+// An error that keeps coming back is reported again after a doubling pause, up
+// to this cap, so a permanently stuck event cannot push everything else out of
+// the bounded journal.
+const archiveNoticeCap = time.Hour
+
+// A report that arrives later than this after the previous one starts over.
+const archiveNoticeGap = 3 * time.Minute
+
+type archiveNotice struct {
+	reported time.Time
+	seen     time.Time
+	window   time.Duration
+}
+
+var archiveRetrySuffix = regexp.MustCompile(`; повтор через \d+ с$`)
 
 func (r *Runtime) reportArchiveError(prefix string, err error, now time.Time) {
 	r.archiveMu.Lock()
@@ -45,14 +61,38 @@ func (r *Runtime) reportArchiveError(prefix string, err error, now time.Time) {
 	if errors.Is(err, context.Canceled) {
 		return
 	}
-	message := prefix + ": " + err.Error()
-	if message == r.archiveError && now.Sub(r.archiveNotice) < time.Minute {
-		return
+	causes := []error{err}
+	var failures eventFailures
+	if errors.As(err, &failures) {
+		causes = failures
 	}
-	r.archiveError, r.archiveNotice = message, now
-	r.Store.Notice(message)
-	// Keep diagnostics available in journald even when the catalog cannot be written.
-	log.Print(message)
+	for key, previous := range r.archiveNotices {
+		if now.Sub(previous.seen) > archiveNoticeCap {
+			delete(r.archiveNotices, key)
+		}
+	}
+	if r.archiveNotices == nil {
+		r.archiveNotices = make(map[string]archiveNotice)
+	}
+	for _, cause := range causes {
+		message := prefix + ": " + cause.Error()
+		// The retry delay changes while the cause stays the same.
+		key := archiveRetrySuffix.ReplaceAllString(message, "")
+		previous, known := r.archiveNotices[key]
+		state := archiveNotice{reported: now, seen: now, window: time.Minute}
+		if known && now.Sub(previous.seen) <= archiveNoticeGap {
+			if now.Sub(previous.reported) < previous.window {
+				previous.seen = now
+				r.archiveNotices[key] = previous
+				continue
+			}
+			state.window = min(previous.window*2, archiveNoticeCap)
+		}
+		r.archiveNotices[key] = state
+		r.Store.Notice(message)
+		// Keep diagnostics available in journald even when the catalog cannot be written.
+		log.Print(message)
+	}
 }
 
 type App struct {

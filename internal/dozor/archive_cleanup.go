@@ -11,7 +11,8 @@ const invalidVideoAttempts = 3
 
 // A bad input can fail a whole minute's assembly. Check each completed source
 // separately so that usable fragments from the same batch are preserved.
-func (e *Engine) discardInvalidSegments(ctx context.Context, ev *Event, segs []Segment) (bool, error) {
+// cause is the assembly error that exhausted the attempts.
+func (e *Engine) discardInvalidSegments(ctx context.Context, ev *Event, segs []Segment, cause error) (bool, error) {
 	type invalidSegment struct {
 		path string
 		err  error
@@ -44,6 +45,13 @@ func (e *Engine) discardInvalidSegments(ctx context.Context, ev *Event, segs []S
 		return false, err
 	}
 	if len(invalid) == 0 {
+		// The recorder registers a fragment from its reported duration, so one can
+		// declare a video track and still hold no frames. Each such file probes
+		// fine, yet FFmpeg drops the empty track and the whole window has no video.
+		// A single frame anywhere would keep the track, so nothing is lost here.
+		if errors.Is(cause, errNoVideo) {
+			return true, e.abandonVideolessWindow(ev, segs)
+		}
 		return false, nil
 	}
 	// Persist the gap before unlinking. Keep the failure count until cleanup
@@ -62,4 +70,18 @@ func (e *Engine) discardInvalidSegments(ctx context.Context, ev *Event, segs []S
 		e.Store.Notice(fmt.Sprintf("Удалён повреждённый фрагмент после %d ошибок сборки: камера %s, событие %s, %s: %v", invalidVideoAttempts, ev.CameraID, ev.ID, seg.path, seg.err))
 	}
 	return true, nil
+}
+
+// abandonVideolessWindow releases a window whose assembly stably has no video
+// while every input still probes as valid. The files stay for the regular buffer
+// pruning, which also serves overlapping events, and the event moves on.
+func (e *Engine) abandonVideolessWindow(ev *Event, segs []Segment) error {
+	ev.Incomplete = true
+	ev.Cursor = segs[len(segs)-1].End
+	ev.AssemblyFailures = 0
+	if err := e.Store.SaveEvent(*ev); err != nil {
+		return err
+	}
+	e.Store.Notice(fmt.Sprintf("Окно записи без видео пропущено после %d ошибок сборки: камера %s, событие %s, %s — %s (%d фрагм.): фрагменты читаются, но кадров в них нет", invalidVideoAttempts, ev.CameraID, ev.ID, segs[0].Path, segs[len(segs)-1].Path, len(segs)))
+	return nil
 }

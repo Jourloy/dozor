@@ -172,3 +172,51 @@ func TestProbeDiagnosticsDoNotExposeCameraCredentials(t *testing.T) {
 		t.Fatalf("camera credentials exposed: %v", err)
 	}
 }
+
+func TestArchiveErrorsOfStuckEventsDoNotFloodJournal(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	s := testStore(t)
+	r := &Runtime{Store: s}
+	now := time.Now()
+	events := []string{ID(), ID(), ID()}
+	report := func(at time.Time, ids ...string) {
+		var failures eventFailures
+		for _, id := range ids {
+			failures = append(failures, fmt.Errorf("камера cam, событие %s, сборка из a — b (1 фрагм.): %w: %w; повтор через 60 с", id, errVideoAssembly, errNoVideo))
+		}
+		r.reportArchiveError("Ошибка обработки архива; повтор будет выполнен", failures, at)
+	}
+	count := func() (n int) {
+		must(t, s.DB.QueryRow("SELECT COUNT(*) FROM notices").Scan(&n))
+		return n
+	}
+	// Each event is retried every minute on its own schedule, so no tick reports
+	// the same combination of events twice in a row.
+	for minute := range 180 {
+		for i, id := range events {
+			report(now.Add(time.Duration(minute)*time.Minute+time.Duration(i)*20*time.Second), id)
+		}
+	}
+	// 1, 2, 4, ... minutes between reports: eight per event in three hours.
+	if n := count(); n != 3*8 || strings.Count(output.String(), events[0]) != 8 {
+		t.Fatalf("stuck events flooded the journal: %d notices", n)
+	}
+	// Several events failing in one tick are throttled individually.
+	before := count()
+	report(now.Add(180*time.Minute), events...)
+	if count() != before {
+		t.Fatal("a joined report repeated notices that were still being throttled")
+	}
+	// A new event, a new cause, or a return after a long silence is reported at once.
+	fresh := ID()
+	report(now.Add(180*time.Minute), fresh)
+	r.reportArchiveError("Ошибка обработки архива; повтор будет выполнен", errors.New("камера cam, событие "+events[0]+": другая причина"), now.Add(181*time.Minute))
+	report(now.Add(6*time.Hour), events[0])
+	report(now.Add(6*time.Hour+time.Minute), events[0])
+	if count() != before+4 {
+		t.Fatalf("expected a notice for a new event, a new cause and a recurrence: %d", count()-before)
+	}
+}

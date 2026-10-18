@@ -2,6 +2,7 @@ package dozor
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -220,5 +221,158 @@ func TestArchiveCleanupPreservesGoodFragmentsWithRealFFmpeg(t *testing.T) {
 	}
 	if s.HasSegment(first.Path) || s.HasSegment(bad.Path) || !s.HasSegment(good.Path) || len(s.Notices()) != 2 {
 		t.Fatal("cleanup removed good inputs or kept corrupt data")
+	}
+}
+
+// The recorder registers a fragment from its reported duration. One that
+// declares a video track but holds no frames probes fine on its own, while FFmpeg
+// drops the empty track and the assembled minute has no video.
+func framelessBinaries(t *testing.T) Binaries {
+	t.Helper()
+	dir := t.TempDir()
+	ffmpeg := filepath.Join(dir, "ffmpeg")
+	probe := filepath.Join(dir, "ffprobe")
+	// The fake concatenates the listed inputs, like the real concat demuxer.
+	must(t, os.WriteFile(ffmpeg, []byte(`#!/bin/sh
+for a; do
+	[ "$prev" = -i ] && list=$a
+	prev=$a
+	out=$a
+done
+cd "$(dirname "$list")" || exit 1
+sed -n "s/^file '\(.*\)'\$/\1/p" "$list" | while read -r f; do cat "$f"; done > "$out"
+`), 0700))
+	must(t, os.WriteFile(probe, []byte(`#!/bin/sh
+for a; do last=$a; done
+case "$last" in
+*.partial) grep -q FRAMES "$last" || { printf '%s' '{"streams":[],"format":{}}'; exit 0; } ;;
+esac
+printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264"}],"format":{"duration":"5"}}'
+`), 0700))
+	return Binaries{MediaMTX: ffmpeg, FFmpeg: ffmpeg, FFprobe: probe, Self: ffmpeg}
+}
+
+func TestArchiveSkipsFramelessWindowAndKeepsLaterVideo(t *testing.T) {
+	s := testStore(t)
+	bins := framelessBinaries(t)
+	now := time.Now().Truncate(time.Second)
+	base := now.Add(-3 * time.Minute)
+	ev := Event{ID: ID(), CameraID: ID(), Status: "closing"}
+	var empty, good []Segment
+	for i := range 14 {
+		start := base.Add(time.Duration(i) * 5 * time.Second).UTC()
+		path := filepath.Join(s.Root, "buffer", ev.CameraID, start.Format("2006-01-02_15-04-05.000000")+".mp4")
+		content := "moov without frames"
+		if i >= 12 {
+			content = "FRAMES"
+		}
+		must(t, AtomicWrite(path, []byte(content), 0600))
+		seg, err := ParseSegment(s.Root, path, 5)
+		must(t, err)
+		must(t, s.AddSegment(seg))
+		if i < 12 {
+			empty = append(empty, seg)
+		} else {
+			good = append(good, seg)
+		}
+	}
+	ev.Start, ev.Cursor, ev.End = empty[0].Start, empty[0].Start, good[1].End
+	must(t, s.SaveEvent(ev))
+	engine := NewEngine(s, bins)
+	attempts := 0
+	engine.assemble = func(ctx context.Context, s *Store, b Binaries, ev Event, segs []Segment) (Part, error) {
+		attempts++
+		return Assemble(ctx, s, b, ev, segs)
+	}
+	for _, offset := range []time.Duration{0, 6 * time.Second} {
+		err := engine.Tick(context.Background(), now.Add(offset))
+		if !errors.Is(err, errNoVideo) || !errors.Is(err, errVideoAssembly) {
+			t.Fatalf("expected the empty-video error, got %v", err)
+		}
+	}
+	must(t, engine.Tick(context.Background(), now.Add(17*time.Second)))
+	actual, err := s.Event(ev.ID)
+	must(t, err)
+	parts, err := s.Parts(ev.ID)
+	must(t, err)
+	if actual.Status != "closed" || !actual.Incomplete || actual.Cursor != ev.End || actual.AssemblyFailures != 0 {
+		t.Fatalf("frameless window kept the event in the retry loop: %+v", actual)
+	}
+	if len(parts) != 1 || parts[0].Start != good[0].Start || parts[0].End != good[1].End {
+		t.Fatalf("later footage was lost with the frameless window: %+v", parts)
+	}
+	notices := s.Notices()
+	if len(notices) != 1 {
+		t.Fatalf("expected one notice for the skipped window: %+v", notices)
+	}
+	for _, detail := range []string{"Окно записи без видео пропущено после 3 ошибок", ev.CameraID, ev.ID, empty[0].Path, empty[11].Path, "12 фрагм."} {
+		if !strings.Contains(notices[0].Message, detail) {
+			t.Fatalf("missing %q: %s", detail, notices[0].Message)
+		}
+	}
+	// Three failed attempts and the one that carried the later footage.
+	for _, offset := range []time.Duration{time.Minute, 5 * time.Minute, time.Hour} {
+		must(t, engine.Tick(context.Background(), now.Add(offset)))
+	}
+	if attempts != 4 || len(s.Notices()) != 1 {
+		t.Fatalf("the closed event was retried: attempts=%d notices=%+v", attempts, s.Notices())
+	}
+}
+
+func TestArchiveSkipsFramelessSegmentWithRealFFmpeg(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	s := testStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	ev, seg := pendingRecording(t, s, ID(), now.Add(-30*time.Second))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	path := filepath.Join(s.Root, seg.Path)
+	// Unlike mpeg4, H.264 keeps its parameters in the header, which stay valid without frames.
+	output, err := exec.CommandContext(ctx, ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=5", "-t", "5", "-c:v", "libx264", "-movflags", "frag_keyframe+empty_moov", "-y", path).CombinedOutput()
+	if err != nil {
+		t.Skipf("ffmpeg cannot encode H.264: %v: %s", err, output)
+	}
+	data, err := os.ReadFile(path)
+	must(t, err)
+	// Keep the headers that declare the video track and drop every fragment.
+	var headers []byte
+	for len(data) >= 8 {
+		size := int(binary.BigEndian.Uint32(data))
+		if size < 8 || size > len(data) {
+			break
+		}
+		if kind := string(data[4:8]); kind == "ftyp" || kind == "moov" {
+			headers = append(headers, data[:size]...)
+		}
+		data = data[size:]
+	}
+	must(t, AtomicWrite(path, headers, 0600))
+	if probe, err := Probe(ctx, ffprobe, path, false); err != nil || probe.Video == "" {
+		t.Fatalf("the fragment must look valid on its own: %+v, %v", probe, err)
+	}
+	engine := NewEngine(s, Binaries{FFmpeg: ffmpeg, FFprobe: ffprobe})
+	for _, seconds := range []int{0, 6} {
+		if err = engine.Tick(ctx, now.Add(time.Duration(seconds)*time.Second)); !errors.Is(err, errNoVideo) {
+			t.Fatalf("expected the empty-video error: %v", err)
+		}
+	}
+	must(t, engine.Tick(ctx, now.Add(17*time.Second)))
+	actual, err := s.Event(ev.ID)
+	must(t, err)
+	if actual.Status != "closed" || !actual.Incomplete || actual.Cursor != seg.End || len(s.Notices()) != 1 {
+		t.Fatalf("frameless fragment kept the event in the retry loop: %+v, %+v", actual, s.Notices())
+	}
+	for _, seconds := range []int{60, 120} {
+		must(t, engine.Tick(ctx, now.Add(time.Duration(seconds)*time.Second)))
+	}
+	if len(s.Notices()) != 1 {
+		t.Fatal("the skipped window was reported again", s.Notices())
 	}
 }

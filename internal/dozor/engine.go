@@ -259,7 +259,7 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("чтение незавершённых событий: %w", err)
 	}
-	var assemblyError error
+	var assemblyErrors eventFailures
 eventsLoop:
 	for _, ev := range events {
 		if e.deferRecovered && ev.Status == "closing" {
@@ -338,7 +338,7 @@ eventsLoop:
 						}
 					}
 					if failures >= invalidVideoAttempts {
-						removed, cleanupErr := e.discardInvalidSegments(ctx, &ev, selected)
+						removed, cleanupErr := e.discardInvalidSegments(ctx, &ev, selected, err)
 						if cleanupErr != nil {
 							return eventError(ev, "удаление повреждённых фрагментов", cleanupErr)
 						}
@@ -362,7 +362,7 @@ eventsLoop:
 					// Include time spent assembling so slow failures also get a pause.
 					retry.next = now.Add(time.Since(started) + retry.delay)
 					e.retries[ev.ID] = retry
-					assemblyError = errors.Join(assemblyError, fmt.Errorf("%w; повтор через %d с", err, int(retry.delay/time.Second)))
+					assemblyErrors = append(assemblyErrors, fmt.Errorf("%w; повтор через %d с", err, int(retry.delay/time.Second)))
 					continue eventsLoop
 				}
 				ev.Cursor = p.End
@@ -400,8 +400,19 @@ eventsLoop:
 	if err := e.Store.PruneBuffer(now); err != nil {
 		return fmt.Errorf("очистка буфера: %w", err)
 	}
-	return assemblyError
+	if len(assemblyErrors) > 0 {
+		return assemblyErrors
+	}
+	return nil
 }
+
+// eventFailures keeps one error per stuck event. Each is retried on its own
+// schedule, so the reporter must throttle them separately: a single joined
+// message changes with every retry and would never match the previous one.
+type eventFailures []error
+
+func (f eventFailures) Error() string   { return errors.Join(f...).Error() }
+func (f eventFailures) Unwrap() []error { return f }
 
 func eventError(ev Event, operation string, err error) error {
 	return fmt.Errorf("камера %s, событие %s, %s: %w", ev.CameraID, ev.ID, operation, err)
