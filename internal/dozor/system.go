@@ -163,17 +163,9 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) (err
 		return err
 	}
 	defer unlock()
-	message := "Проверяем наличие обновлений"
-	status := func(msg string) {
-		message = msg
-		_ = writeUpdateStatus("/var/lib/dozor", message, true)
-	}
-	defer func() {
-		if err != nil {
-			message = err.Error()
-		}
-		_ = writeUpdateStatus("/var/lib/dozor", message, false)
-	}()
+	record := newUpdateRecorder("/var/lib/dozor", u)
+	status := record.status
+	defer func() { _ = record.finish(err) }()
 	if e := u.Recover(); e != nil {
 		return e
 	}
@@ -202,11 +194,11 @@ func SystemUpdate(ctx context.Context, configPath string, recoverOnly bool) (err
 		if err = u.reconcileSystem(ctx, current.Version); err != nil {
 			return err
 		}
-		status("Служба обновления готова")
+		u.finishReconciled(status)
 		return nil
 	}
 	if !cfg.AutoUpdate && !u.Immediate {
-		status("Автообновление выключено")
+		u.finishDisabled(status)
 		return nil
 	}
 	u.Stop = func() error {
@@ -284,9 +276,24 @@ func preflightRelease(ctx context.Context, staged, version string) error {
 	return nil
 }
 
+// finishReconciled ends a run that only brought the helper up to date. Nothing
+// was installed or attempted, so it counts as "noop".
+func (u *Updater) finishReconciled(status func(string)) {
+	u.Outcome = updateOutcomeNoop
+	status("Служба обновления готова")
+}
+
+// finishDisabled ends a scheduled run that is skipped because auto-update is off.
+func (u *Updater) finishDisabled(status func(string)) {
+	u.Outcome = updateOutcomeDisabled
+	status("Автообновление выключено")
+}
+
 func (u *Updater) updateRunning(ctx context.Context, address string, client *http.Client, status func(string)) (err error) {
+	u.Target, u.Outcome = "", ""
 	defer func() {
 		if err != nil {
+			u.Outcome = updateOutcomeFailed
 			status(err.Error())
 		}
 	}()
@@ -296,6 +303,8 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 	}
 	// Repair system integration when possible, but a damaged application binary
 	// must not prevent the independent helper from installing its replacement.
+	// This error is only reported through status: if nothing newer is released,
+	// the run still ends as "noop", a failed reconcile alone is not "failed".
 	if e = u.reconcileSystem(ctx, current.Version); e != nil {
 		status("Не удалось согласовать текущую интеграцию; проверяем исправление: " + e.Error())
 	}
@@ -304,9 +313,12 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 		return e
 	}
 	if !Newer(s.Release.Version, current.Version) {
+		u.Outcome = updateOutcomeNoop
 		status("Установлена актуальная версия")
 		return nil
 	}
+	// From here on the attempt has a target version, also for the failures.
+	u.Target = s.Release.Version
 	// Download and verify before reserving an idle maintenance window.
 	status("Скачиваем и проверяем обновление")
 	staged, e := u.Stage(ctx, s)
@@ -325,6 +337,8 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 		return e
 	}
 	if !Newer(s.Release.Version, current.Version) {
+		// The running application caught up meanwhile: nothing left to install.
+		u.Target, u.Outcome = "", updateOutcomeNoop
 		status("Установлена актуальная версия")
 		return nil
 	}
@@ -349,6 +363,7 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 		io.Copy(io.Discard, res.Body)
 		res.Body.Close()
 		if res.StatusCode == http.StatusConflict {
+			u.Outcome = updateOutcomeDeferred
 			status("Обновление загружено; ожидаем завершения событий")
 			return u.clearJournal()
 		}
@@ -362,6 +377,7 @@ func (u *Updater) updateRunning(ctx context.Context, address string, client *htt
 	if e = u.Apply(ctx, s); e != nil {
 		return e
 	}
+	u.Outcome = updateOutcomeOK
 	status(fmt.Sprintf("Установлена %s · %s", s.Release.Version, time.Now().UTC().Format(time.RFC3339)))
 	return nil
 }

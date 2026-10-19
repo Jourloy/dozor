@@ -49,6 +49,10 @@ type Updater struct {
 	System      *SystemIntegration
 	HealthError string
 	Immediate   bool
+	// Target is the version the current attempt is trying to install, and
+	// Outcome is how updateRunning ended; both are "" until they are known.
+	Target  string
+	Outcome string
 }
 
 var versionPattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)

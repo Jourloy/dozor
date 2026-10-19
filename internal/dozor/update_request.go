@@ -13,19 +13,106 @@ import (
 	"time"
 )
 
+// Final outcomes of the last finished update attempt, exposed as update_outcome.
+// An empty outcome means that an attempt is running or that nothing is known.
+const (
+	updateOutcomeOK       = "ok"       // a new version was installed
+	updateOutcomeNoop     = "noop"     // already up to date, or nothing to install
+	updateOutcomeDisabled = "disabled" // automatic updates are off
+	updateOutcomeDeferred = "deferred" // downloaded, waiting for an idle window
+	updateOutcomeFailed   = "failed"   // any error, rollback, failed start or interruption
+)
+
+// The systemd unit has a 25-minute limit; after that a running record is orphaned.
+const staleUpdateAfter = 26 * time.Minute
+
 type updateStatus struct {
 	Message string    `json:"message"`
 	Running bool      `json:"running"`
 	At      time.Time `json:"at"`
+	// Outcome and Target are absent in files written by older releases.
+	Outcome string `json:"outcome,omitempty"`
+	Target  string `json:"target,omitempty"`
 }
 
-func writeUpdateStatus(state, message string, running bool) error {
-	b, err := json.Marshal(updateStatus{Message: message, Running: running, At: time.Now().UTC()})
+// atMillis is the time the outcome was written, or 0 when no outcome is known.
+// For files without an outcome the timestamp is only progress, not a result.
+func (s updateStatus) atMillis() int64 {
+	if s.Outcome == "" || s.At.IsZero() {
+		return 0
+	}
+	return s.At.UnixMilli()
+}
+
+func writeUpdateRecord(state string, status updateStatus) error {
+	status.At = time.Now().UTC()
+	b, err := json.Marshal(status)
 	if err != nil {
 		return err
 	}
 	// The updater runs as root, but the application must be able to read progress.
 	return AtomicWrite(filepath.Join(state, "update-status.json"), b, 0644)
+}
+
+// writeUpdateStatus records progress of a running attempt: it has no outcome yet.
+func writeUpdateStatus(state, message string, running bool) error {
+	return writeUpdateRecord(state, updateStatus{Message: message, Running: running})
+}
+
+// writeUpdateOutcome records the final state of an attempt. target is the
+// version the attempt tried to install, or "" when unknown.
+func writeUpdateOutcome(state, message, outcome, target string) error {
+	return writeUpdateRecord(state, updateStatus{Message: message, Outcome: outcome, Target: target})
+}
+
+// recordUpdateProgress stores an intermediate state of a running attempt. It
+// carries the target version once known, so an interrupted attempt keeps it.
+func recordUpdateProgress(state, message string, u *Updater) error {
+	return writeUpdateRecord(state, updateStatus{Message: message, Running: true, Target: u.Target})
+}
+
+// recordUpdateResult stores the final state of an attempt. An error always
+// makes it "failed" and its text becomes the message; otherwise the outcome
+// chosen by the updater is used, "" if none was set.
+func recordUpdateResult(state, message string, u *Updater, err error) error {
+	outcome := u.Outcome
+	if err != nil {
+		message, outcome = err.Error(), updateOutcomeFailed
+	}
+	return writeUpdateOutcome(state, message, outcome, u.Target)
+}
+
+// updateRecorder is the status bookkeeping of one SystemUpdate run: the
+// progress callback given to the updater and the single final record. The
+// last message is kept here, so the final record carries it unless the run
+// failed. SystemUpdate and its tests share this code.
+type updateRecorder struct {
+	state   string
+	u       *Updater
+	message string
+	// write stores the final record. It is a field only to let tests fail it.
+	write func(state, message string, u *Updater, err error) error
+}
+
+func newUpdateRecorder(state string, u *Updater) *updateRecorder {
+	return &updateRecorder{state: state, u: u, message: "Проверяем наличие обновлений", write: recordUpdateResult}
+}
+
+// status is the progress callback of the updater.
+func (r *updateRecorder) status(message string) {
+	r.message = message
+	_ = recordUpdateProgress(r.state, message, r.u)
+}
+
+// finish writes the final record of the run; err is the error SystemUpdate
+// returns. A failed write is repeated once. If the second write fails too, the
+// last "running" record stays on disk: readUpdateStatus then reports an
+// interrupted, failed attempt after 26 minutes, although the run has finished.
+func (r *updateRecorder) finish(err error) error {
+	if e := r.write(r.state, r.message, r.u, err); e == nil {
+		return nil
+	}
+	return r.write(r.state, r.message, r.u, err)
 }
 
 func readUpdateStatus(state string) updateStatus {
@@ -40,9 +127,15 @@ func readUpdateStatus(state string) updateStatus {
 	}
 	// The systemd unit has a 25-minute limit. A killed updater cannot leave the
 	// button disabled forever, even if it never got to write a final result.
-	if status.Running && time.Since(status.At) > 26*time.Minute {
+	if status.Running && time.Since(status.At) > staleUpdateAfter {
 		status.Running = false
 		status.Message = "Проверка обновлений прервана; повторите попытку"
+		status.Outcome = updateOutcomeFailed
+		// The result is derived from the stored record, not from the clock of
+		// this read, so it is the same on every read and the backend can dedupe.
+		if !status.At.IsZero() {
+			status.At = status.At.Add(staleUpdateAfter)
+		}
 	}
 	return status
 }
@@ -82,7 +175,7 @@ func (a *App) requestUpdate(w http.ResponseWriter, r *http.Request) {
 	if err = exec.CommandContext(ctx, "systemctl", "--no-block", "start", "dozor-update.service").Run(); err != nil {
 		_ = os.Remove(request)
 		message := "Не удалось запустить обновление. Проверьте системную службу и права доступа."
-		_ = writeUpdateStatus(a.StateDir, message, false)
+		_ = writeUpdateOutcome(a.StateDir, message, updateOutcomeFailed, "")
 		apiError(w, 503, message)
 		return
 	}

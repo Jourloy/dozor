@@ -459,6 +459,7 @@ func (a *App) Status() map[string]any {
 	}
 	update := readUpdateStatus(a.StateDir)
 	m["update_status"], m["update_running"] = update.Message, update.Running
+	m["update_outcome"], m["update_target"], m["update_at"] = update.Outcome, update.Target, update.atMillis()
 	m["health"] = a.Health()
 	return m
 }

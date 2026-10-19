@@ -81,6 +81,8 @@ func TestManualUpdateAPI(t *testing.T) {
 				must(t, err)
 				if status := a.Status(); status["update_running"] != true || status["update_status"] != "Проверяем наличие обновлений" {
 					t.Fatalf("missing progress: %+v", status)
+				} else if status["update_outcome"] != "" || status["update_target"] != "" || status["update_at"] != int64(0) {
+					t.Fatalf("running update already has an outcome: %+v", status)
 				}
 				// Only the private control socket can consume the request, once.
 				client := &http.Client{Transport: updateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -100,6 +102,18 @@ func TestManualUpdateAPI(t *testing.T) {
 			}
 			if tc.exit != 0 && readUpdateStatus(dir).Running {
 				t.Fatal("failed start left the update button busy")
+			}
+			if tc.exit != 0 {
+				// The unit could not be started: that attempt is over and it failed.
+				before := time.Now().Add(-time.Minute).UnixMilli()
+				status := a.Status()
+				at, _ := status["update_at"].(int64)
+				if status["update_outcome"] != "failed" || status["update_target"] != "" || status["update_running"] != false || at < before || status["update_status"] != "Не удалось запустить обновление. Проверьте системную службу и права доступа." {
+					t.Fatalf("failed start: %+v", status)
+				}
+				if again, _ := a.Status()["update_at"].(int64); again != at {
+					t.Fatalf("update_at changed between reads: %d, %d", at, again)
+				}
 			}
 		})
 	}
