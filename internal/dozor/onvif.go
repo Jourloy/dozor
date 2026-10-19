@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -208,41 +209,94 @@ type Discovery struct {
 	Scopes   string `json:"scopes"`
 }
 
-func Discover(ctx context.Context) ([]Discovery, error) {
-	conn, e := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+var wsGroup = &net.UDPAddr{IP: net.IPv4(239, 255, 255, 250), Port: 3702}
+
+// wsReply is one WS-Discovery answer: the UDP source and every XAddr it lists.
+type wsReply struct {
+	from    net.IP
+	matches []Discovery
+}
+
+// wsProbe multicasts a Probe from the local address (any when nil) and collects
+// the ProbeMatch replies until the wait or the context ends. Multicast is lossy,
+// above all over Wi-Fi, so the Probe is sent again at 3/8 and 3/4 of the wait,
+// each time with a new MessageID.
+func wsProbe(ctx context.Context, group *net.UDPAddr, local net.IP, wait time.Duration) ([]wsReply, error) {
+	if local == nil {
+		local = net.IPv4zero
+	}
+	conn, e := net.ListenUDP("udp4", &net.UDPAddr{IP: local})
 	if e != nil {
 		return nil, e
 	}
 	defer conn.Close()
-	msg := `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl"><s:Header><a:MessageID>` + uuidURN() + `</a:MessageID><a:To s:mustUnderstand="true">urn:schemas-xmlsoap-org:ws:2005:04:discovery</a:To><a:Action s:mustUnderstand="true">http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</a:Action></s:Header><s:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></s:Body></s:Envelope>`
-	_, e = conn.WriteToUDP([]byte(msg), &net.UDPAddr{IP: net.IPv4(239, 255, 255, 250), Port: 3702})
-	if e != nil {
+	// Closing wakes the reader at once, whatever deadline it waits for.
+	defer context.AfterFunc(ctx, func() { conn.Close() })()
+	probe := func() error {
+		msg := `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl"><s:Header><a:MessageID>` + uuidURN() + `</a:MessageID><a:To s:mustUnderstand="true">urn:schemas-xmlsoap-org:ws:2005:04:discovery</a:To><a:Action s:mustUnderstand="true">http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</a:Action></s:Header><s:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></s:Body></s:Envelope>`
+		_, e := conn.WriteToUDP([]byte(msg), group)
+		return e
+	}
+	if e = probe(); e != nil {
 		return nil, e
 	}
-	deadline := time.Now().Add(4 * time.Second)
+	start := time.Now()
+	deadline := start.Add(wait)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
-	_ = conn.SetReadDeadline(deadline)
-	results := []Discovery{}
-	seen := map[string]bool{}
+	resend := []time.Time{start.Add(wait * 3 / 8), start.Add(wait * 3 / 4)}
+	replies := []wsReply{}
 	buf := make([]byte, 65535)
 	for {
-		n, _, e := conn.ReadFromUDP(buf)
+		if len(resend) > 0 && !time.Now().Before(resend[0]) {
+			_ = probe()
+			resend = resend[1:]
+		}
+		until := deadline
+		if len(resend) > 0 && resend[0].Before(until) {
+			until = resend[0]
+		}
+		_ = conn.SetReadDeadline(until)
+		n, from, e := conn.ReadFromUDP(buf)
 		if e != nil {
+			if errors.Is(e, os.ErrDeadlineExceeded) && time.Now().Before(deadline) {
+				continue // Time for the next Probe.
+			}
 			break
 		}
 		tree, e := parseXML(buf[:n])
 		if e != nil {
 			continue
 		}
+		r := wsReply{from: from.IP}
+		matched := false
 		for _, p := range tree.find("ProbeMatch") {
+			matched = true
 			for _, ep := range strings.Fields(p.text("XAddrs")) {
-				u, e := url.Parse(ep)
-				if e == nil && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil && !seen[ep] {
-					seen[ep] = true
-					results = append(results, Discovery{ep, p.text("Scopes")})
-				}
+				r.matches = append(r.matches, Discovery{ep, p.text("Scopes")})
+			}
+		}
+		if matched {
+			replies = append(replies, r)
+		}
+	}
+	return replies, nil
+}
+
+func Discover(ctx context.Context) ([]Discovery, error) {
+	replies, e := wsProbe(ctx, wsGroup, nil, 4*time.Second)
+	if e != nil {
+		return nil, e
+	}
+	results := []Discovery{}
+	seen := map[string]bool{}
+	for _, r := range replies {
+		for _, m := range r.matches {
+			u, e := url.Parse(m.Endpoint)
+			if e == nil && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil && !seen[m.Endpoint] {
+				seen[m.Endpoint] = true
+				results = append(results, m)
 			}
 		}
 	}
