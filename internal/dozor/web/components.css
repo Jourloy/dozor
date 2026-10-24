@@ -1086,7 +1086,7 @@
   }
 
   /* ---------- Dialog and alert dialog: native <dialog> + showModal(), packages/00/src/ui/dialog and alert-dialog
-     plus components/AtmosphereDialog. Surface radius xl, Cormorant title 30px (26px under 360px).
+     plus components/AtmosphereDialog. Surface radius xl, Lora title 30px (26px under 360px).
      Up to 640px the window becomes a bottom sheet with only the top corners rounded. ---------- */
   .ui-dialog {
     position: fixed;

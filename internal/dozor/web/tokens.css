@@ -20,33 +20,33 @@
   font-display: swap;
   src: url(/fonts/Geist.woff2) format("woff2");
 }
-/* Cormorant Garamond: variable, accent headings only (never below 24px). */
+/* Lora: variable, accent headings only (never below 24px). */
 @font-face {
-  font-family: "A00 Cormorant Garamond";
+  font-family: "A00 Lora";
   font-style: normal;
-  font-weight: 300 700;
+  font-weight: 400 700;
   font-display: swap;
-  src: url(/fonts/CormorantGaramond.woff2) format("woff2");
+  src: url(/fonts/Lora.woff2) format("woff2");
 }
-/* Metric-matched Georgia stand-ins for Cormorant (packages/00/src/fonts/fonts.css): a late swap barely shifts layout. */
+/* Metric-matched Georgia stand-ins for Lora (packages/00/src/fonts/fonts.css): a late swap barely shifts layout. */
 @font-face {
-  font-family: "A00 Cormorant Garamond Fallback";
+  font-family: "A00 Lora Fallback";
   font-style: normal;
-  font-weight: 300 599;
+  font-weight: 400 599;
   src: local("Georgia"), local("Georgia-Regular");
-  size-adjust: 85.9%;
-  ascent-override: 107.6%;
-  descent-override: 33.4%;
+  size-adjust: 105.5%;
+  ascent-override: 95.4%;
+  descent-override: 26%;
   line-gap-override: 0%;
 }
 @font-face {
-  font-family: "A00 Cormorant Garamond Fallback";
+  font-family: "A00 Lora Fallback";
   font-style: normal;
   font-weight: 600 700;
   src: local("Georgia Bold"), local("Georgia-Bold");
-  size-adjust: 74.9%;
-  ascent-override: 123.4%;
-  descent-override: 38.3%;
+  size-adjust: 92.9%;
+  ascent-override: 108.3%;
+  descent-override: 29.5%;
   line-gap-override: 0%;
 }
 /* IBM Plex Mono: code, keys, identifiers. Only the Latin subset (RTSP addresses, UUIDs, JSON are ASCII). */
@@ -112,7 +112,7 @@
   /* fonts, section 5.1 */
   --a00-font: "A00 Geist", "Geist", system-ui, sans-serif;
   --a00-font-ui: var(--a00-font);
-  --a00-font-display: "A00 Cormorant Garamond", "Cormorant Garamond", "A00 Cormorant Garamond Fallback", Georgia, serif;
+  --a00-font-display: "A00 Lora", "Lora", "A00 Lora Fallback", Georgia, serif;
   --a00-font-code: "A00 IBM Plex Mono", ui-monospace, monospace;
   --a00-font-mono: var(--a00-font-ui); /* deprecated in 00 */
 
