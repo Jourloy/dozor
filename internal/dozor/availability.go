@@ -199,7 +199,7 @@ func (r *Runtime) tickStreams(ctx context.Context, now time.Time) error {
 	}
 	sort.SliceStable(signals, func(i, j int) bool { return signals[i].At < signals[j].At })
 	for _, v := range signals {
-		if err := r.setStream(ctx, v.CameraID, v.Online, min(v.At, now.UnixMilli())); err != nil {
+		if err := r.observeStream(ctx, v.CameraID, v.Online, min(v.At, now.UnixMilli())); err != nil {
 			return err
 		}
 	}
@@ -212,13 +212,13 @@ func (r *Runtime) tickStreams(ctx context.Context, now time.Time) error {
 			alive := r.mediaSince.Load() > 0
 			online := state.State == "online"
 			if online && (!alive || now.UnixMilli()-max(state.Start, end) > streamTimeout.Milliseconds()) {
-				if err := r.setStream(ctx, camera, false, now.UnixMilli()); err != nil {
+				if err := r.observeStream(ctx, camera, false, now.UnixMilli()); err != nil {
 					return err
 				}
 			} else if !online && alive && start >= state.Start && end > now.Add(-streamTimeout).UnixMilli() {
 				// A fresh recording also recovers a lost online hook; an old tail
 				// delivered after disconnection must never bring the camera online.
-				if err := r.setStream(ctx, camera, true, start); err != nil {
+				if err := r.observeStream(ctx, camera, true, start); err != nil {
 					return err
 				}
 			}

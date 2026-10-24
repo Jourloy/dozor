@@ -327,17 +327,25 @@ eventsLoop:
 					if guardErr := e.Store.Guard.Check(); guardErr != nil {
 						return eventError(ev, "проверка диска", guardErr)
 					}
-					failures := 0
-					if invalidVideoData(err) {
-						failures = min(ev.AssemblyFailures+1, invalidVideoAttempts)
-					}
+					failures := min(ev.AssemblyFailures+1, maxAssemblyFailures)
 					if failures != ev.AssemblyFailures {
 						ev.AssemblyFailures = failures
 						if saveErr := e.Store.SaveEvent(ev); saveErr != nil {
 							return eventError(ev, "сохранение ошибок сборки", saveErr)
 						}
 					}
-					if failures >= invalidVideoAttempts {
+					if failures >= maxAssemblyFailures {
+						if deleteErr := e.Store.deleteEvent(ev); deleteErr != nil {
+							return eventError(ev, "удаление несобранного архива", deleteErr)
+						}
+						delete(e.retries, ev.ID)
+						if e.active[ev.CameraID] == ev.ID {
+							delete(e.active, ev.CameraID)
+						}
+						e.Store.Notice(fmt.Sprintf("Архив удалён после %d ошибок сборки: %v", failures, err))
+						continue eventsLoop
+					}
+					if failures >= invalidVideoAttempts && invalidVideoData(err) {
 						removed, cleanupErr := e.discardInvalidSegments(ctx, &ev, selected, err)
 						if cleanupErr != nil {
 							return eventError(ev, "удаление повреждённых фрагментов", cleanupErr)

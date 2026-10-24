@@ -18,6 +18,9 @@ import (
 )
 
 type Runtime struct {
+	network           *NetworkWatchdog
+	breaks            map[string][]int64
+	lastBreak         int64
 	Store             *Store
 	Engine            *Engine
 	cancel            context.CancelFunc
@@ -110,6 +113,7 @@ type App struct {
 	setupToken                string
 	updateMu                  sync.Mutex
 	reboots                   *RebootScheduler
+	network                   *NetworkWatchdog
 	statusView                atomic.Value
 	healthView                atomic.Value
 	runStarted                atomic.Int64
@@ -124,11 +128,15 @@ func NewApp(c *ConfigFile, b Binaries, dev bool, state, socket, version string) 
 	if err != nil {
 		return nil, err
 	}
+	network, err := loadNetworkWatchdog(state)
+	if err != nil {
+		return nil, err
+	}
 	storage, err := loadStoragePolicy(state)
 	if err != nil {
 		return nil, err
 	}
-	a := &App{storage: storage, reboots: reboots, Config: c, Bins: b, Development: dev, StateDir: state, Socket: socket, Version: version, reload: make(chan struct{}, 1), sessions: map[string]Session{}, attempts: map[string]loginAttempt{}}
+	a := &App{network: network, storage: storage, reboots: reboots, Config: c, Bins: b, Development: dev, StateDir: state, Socket: socket, Version: version, reload: make(chan struct{}, 1), sessions: map[string]Session{}, attempts: map[string]loginAttempt{}}
 	if c.Get().PasswordHash == "" {
 		p := filepath.Join(state, "setup-token")
 		token, e := os.ReadFile(p)
@@ -193,7 +201,7 @@ func (a *App) start(ctx context.Context) error {
 
 	rctx, cancel := context.WithCancel(ctx)
 	archiveCtx, archiveCancel := context.WithCancel(rctx)
-	r := &Runtime{catalogMS: time.Since(started).Milliseconds(), Store: s, Engine: NewEngine(s, a.Bins), cancel: cancel, archiveCancel: archiveCancel, segments: make(chan Segment, 512), bufferWake: make(chan struct{}, 1)}
+	r := &Runtime{network: a.network, catalogMS: time.Since(started).Milliseconds(), Store: s, Engine: NewEngine(s, a.Bins), cancel: cancel, archiveCancel: archiveCancel, segments: make(chan Segment, 512), bufferWake: make(chan struct{}, 1)}
 	r.Engine.deferRecovered = true
 	if e = r.initStreams(c.Cameras, time.Now()); e != nil {
 		s.Close()
@@ -314,6 +322,10 @@ func (a *App) Run(ctx context.Context) error {
 	rebootsDone := make(chan struct{})
 	go func() { defer close(rebootsDone); a.runRebootScheduler(rebootCtx) }()
 	defer func() { stopReboots(); <-rebootsDone }()
+	networkCtx, stopNetwork := context.WithCancel(ctx)
+	networkDone := make(chan struct{})
+	go func() { defer close(networkDone); a.runNetworkWatchdog(networkCtx) }()
+	defer func() { stopNetwork(); <-networkDone }()
 	healthCtx, cancelHealth := context.WithCancel(ctx)
 	healthDone := make(chan struct{})
 	go func() { defer close(healthDone); a.runHealth(healthCtx) }()
@@ -461,6 +473,9 @@ func (a *App) Status() map[string]any {
 	m["update_status"], m["update_running"] = update.Message, update.Running
 	m["update_outcome"], m["update_target"], m["update_at"] = update.Outcome, update.Target, update.atMillis()
 	m["health"] = a.Health()
+	if a.network != nil {
+		m["network_reboots"] = a.network.Reports()
+	}
 	return m
 }
 func (a *App) publishStatus(r *Runtime) {

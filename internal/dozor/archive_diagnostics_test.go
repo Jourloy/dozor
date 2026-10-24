@@ -64,7 +64,7 @@ func TestArchiveAssemblyRetryBackoff(t *testing.T) {
 		attempts++
 		return Part{}, errVideoAssembly
 	}
-	for i, seconds := range []int{5, 10, 20, 40, 60, 60} {
+	for i, seconds := range []int{5, 10, 20} {
 		err := engine.Tick(context.Background(), now)
 		if !errors.Is(err, errVideoAssembly) || !strings.Contains(err.Error(), fmt.Sprintf("повтор через %d с", seconds)) {
 			t.Fatalf("attempt %d: %v", i+1, err)

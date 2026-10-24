@@ -2,6 +2,7 @@ package dozor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -71,7 +72,7 @@ func TestArchiveDiscardsInvalidSegmentsAfterThreeFailures(t *testing.T) {
 	}
 }
 
-func TestArchiveCleanupKeepsVideoOnToolAndStorageFailures(t *testing.T) {
+func TestArchiveDeletesUnassemblableEventAfterFourthFailure(t *testing.T) {
 	for _, failure := range []string{"missing ffmpeg", "missing ffprobe", "permission denied", "no space left", "timeout", "valid inputs", "probe unavailable"} {
 		t.Run(failure, func(t *testing.T) {
 			s := testStore(t)
@@ -98,7 +99,7 @@ func TestArchiveCleanupKeepsVideoOnToolAndStorageFailures(t *testing.T) {
 					must(t, os.Remove(bins.FFprobe))
 				}
 			}
-			for _, seconds := range []int{0, 6, 17, 38, 79} {
+			for _, seconds := range []int{0, 6, 17} {
 				if err := engine.Tick(context.Background(), now.Add(time.Duration(seconds)*time.Second)); !errors.Is(err, errVideoAssembly) {
 					t.Fatalf("expected retryable failure, got %v", err)
 				}
@@ -109,6 +110,28 @@ func TestArchiveCleanupKeepsVideoOnToolAndStorageFailures(t *testing.T) {
 			must(t, err)
 			if !s.HasSegment(seg.Path) || actual.Cursor != ev.Cursor || actual.Status != "closing" || len(s.Notices()) != 0 {
 				t.Fatalf("tool failure discarded video: %+v", actual)
+			}
+			// The count is durable, including errors unrelated to corrupt input.
+			engine = NewEngine(s, bins)
+			if failure == "timeout" {
+				engine.assemble = func(context.Context, *Store, Binaries, Event, []Segment) (Part, error) {
+					return Part{}, fmt.Errorf("%w: %w", errVideoAssembly, context.DeadlineExceeded)
+				}
+			}
+			must(t, engine.Tick(context.Background(), now.Add(38*time.Second)))
+			if _, err = s.Event(ev.ID); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("fourth failure left an event: %v", err)
+			}
+			if len(s.Notices()) != 1 || !strings.Contains(s.Notices()[0].Message, "после 4 ошибок") {
+				t.Fatal("missing deletion notice", s.Notices())
+			}
+			if _, err = os.Stat(filepath.Join(s.Root, eventDir(ev))); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("deleted archive directory remains: %v", err)
+			}
+			must(t, s.Recover())
+			must(t, engine.Tick(context.Background(), now.Add(2*time.Minute)))
+			if _, err = s.Event(ev.ID); !errors.Is(err, sql.ErrNoRows) || s.QueueCount() != 0 {
+				t.Fatalf("deleted event or upload jobs returned: %v", err)
 			}
 		})
 	}
