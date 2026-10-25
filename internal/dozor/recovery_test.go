@@ -137,7 +137,11 @@ func TestSensitivityReloadStartsDespiteUnfinishedVideo(t *testing.T) {
 		must(t, app.start(ctx))
 		deadline := time.Now().Add(4 * time.Second)
 		for {
+			// The counter is persisted before cleanup and its journal entry.
+			// Reload only after the whole attempt, not halfway through it.
+			app.runtime.Engine.tickMu.Lock()
 			actual, err := app.runtime.Store.Event(ev.ID)
+			app.runtime.Engine.tickMu.Unlock()
 			if errors.Is(err, sql.ErrNoRows) {
 				break // A fourth failed assembly deletes the event across reloads.
 			}

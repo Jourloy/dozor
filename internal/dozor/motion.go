@@ -68,17 +68,29 @@ func (d *Detector) Frame(p []byte) bool {
 	return d.hits >= 2
 }
 
+const detectorFrameTimeout = 20 * time.Second
+
+var errDetectorStalled = errors.New("детектор не получает кадры 20 секунд")
+
 type LocalMotion struct{ FFmpeg string }
 
-func (l LocalMotion) Run(ctx context.Context, c Camera, emit func(MotionSignal)) (result error) {
+func (l LocalMotion) Run(ctx context.Context, c Camera, emit func(MotionSignal)) error {
+	return l.run(ctx, c, emit, detectorFrameTimeout)
+}
+
+func (l LocalMotion) run(ctx context.Context, c Camera, emit func(MotionSignal), timeout time.Duration) (result error) {
 	if c.SubURL == "" {
 		return errors.New("нет дополнительного потока для детектора")
 	}
+	parent := ctx
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	input := CameraURL(c, true)
 	cmd := exec.CommandContext(ctx, l.FFmpeg, "-nostdin", "-v", "error", "-rtsp_transport", "tcp", "-timeout", "8000000", "-i", input, "-an", "-vf", "fps=5,scale=320:180", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1")
 	var stderr diagnosticBuffer
 	output := cameraCommandOutput(&stderr, input)
 	cmd.Stderr = output
+	cmd.WaitDelay = 2 * time.Second
 	out, e := cmd.StdoutPipe()
 	if e != nil {
 		return e
@@ -86,7 +98,16 @@ func (l LocalMotion) Run(ctx context.Context, c Camera, emit func(MotionSignal))
 	if e = cmd.Start(); e != nil {
 		return cameraCommandError(ctx, "ffmpeg", e, &stderr, input)
 	}
+	frames := make(chan struct{}, 1)
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		watchMotionFrames(ctx, frames, cancel, timeout)
+	}()
 	defer func() {
+		cause := context.Cause(ctx)
+		cancel(nil)
+		<-watched
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
@@ -95,7 +116,10 @@ func (l LocalMotion) Run(ctx context.Context, c Camera, emit func(MotionSignal))
 		if waitErr == nil {
 			waitErr = result
 		}
-		result = fmt.Errorf("поток детектора прерван: %w", cameraCommandError(ctx, "ffmpeg", waitErr, &stderr, input))
+		if errors.Is(cause, errDetectorStalled) && parent.Err() == nil {
+			waitErr = cause
+		}
+		result = fmt.Errorf("поток детектора прерван: %w", cameraCommandError(parent, "ffmpeg", waitErr, &stderr, input))
 	}()
 	d := NewDetector(320, 180, c.Sensitivity, c.Masks)
 	frame := make([]byte, 320*180)
@@ -104,9 +128,34 @@ func (l LocalMotion) Run(ctx context.Context, c Camera, emit func(MotionSignal))
 		if e != nil {
 			return e
 		}
-		emit(MotionSignal{CameraID: c.ID, Active: d.Frame(frame), Healthy: true, Source: "local", At: time.Now()})
+		select {
+		case frames <- struct{}{}:
+		default:
+		}
+		active := d.Frame(frame)
+		// Keep continuous recording through the background model's warmup.
+		emit(MotionSignal{CameraID: c.ID, Active: active, Healthy: d.warmup >= 15, Source: "local", At: time.Now()})
 	}
 }
+
+// A live process or incoming network packets do not prove that frames decode.
+// Only complete frames reset the timer; cancellation kills FFmpeg and unblocks ReadFull.
+func watchMotionFrames(ctx context.Context, frames <-chan struct{}, cancel context.CancelCauseFunc, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-frames:
+			timer.Reset(timeout)
+		case <-timer.C:
+			cancel(errDetectorStalled)
+			return
+		}
+	}
+}
+
 func RunMotion(ctx context.Context, c Camera, b Binaries, emit func(MotionSignal), notice func(string)) {
 	emit(MotionSignal{CameraID: c.ID, Healthy: false, Source: "initializing", At: time.Now()})
 	for ctx.Err() == nil {

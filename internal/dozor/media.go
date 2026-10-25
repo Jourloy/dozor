@@ -153,6 +153,10 @@ func hashFileContext(ctx context.Context, path string) (sha, md string, size int
 }
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 func MediaConfig(c Config, b Binaries, socket string) ([]byte, error) {
+	return mediaConfig(c, b, socket, nil)
+}
+
+func mediaConfig(c Config, b Binaries, socket string, control *mediaControl) ([]byte, error) {
 	hook := shellQuote(b.Self) + " hook --socket " + shellQuote(socket) + " --archive " + shellQuote(c.Archive)
 	paths := map[string]any{}
 	for _, cam := range c.Cameras {
@@ -167,9 +171,22 @@ func MediaConfig(c Config, b Binaries, socket string) ([]byte, error) {
 		"hlsVariant": "fmp4", "hlsSegmentCount": 7, "hlsSegmentDuration": "1s", "hlsSegmentMaxSize": "16M", "hlsDirectory": "", "hlsMuxerCloseAfter": "15s",
 		"authInternalUsers": []any{map[string]any{"user": "any", "ips": []string{"127.0.0.1", "::1"}, "permissions": []any{map[string]any{"action": "read"}}}},
 		"pathDefaults":      map[string]any{"recordPath": filepath.Join(c.Archive, "buffer", "%path", "%Y-%m-%d_%H-%M-%S.%f"), "recordFormat": "fmp4", "recordPartDuration": "1s", "recordMaxPartSize": "8M", "recordSegmentDuration": "5s", "recordDeleteAfter": "0s", "runOnRecordSegmentComplete": hook, "runOnOnline": hook + " --stream online", "runOnOffline": hook + " --stream offline"}}
+	if control != nil {
+		v["api"] = true
+		v["apiAddress"] = control.address
+		v["apiAllowOrigins"] = []string{}
+		v["authInternalUsers"] = append(v["authInternalUsers"].([]any), map[string]any{
+			"user": "dozor-recorder", "pass": control.password, "ips": []string{"127.0.0.1"},
+			"permissions": []any{map[string]any{"action": "api"}},
+		})
+	}
 	return json.MarshalIndent(v, "", "  ") // JSON is a YAML subset; avoids interpolating credentials into syntax.
 }
 func RunMedia(ctx context.Context, c Config, b Binaries, socket, configPath string, notice func(string), ready func(bool), failed func(Camera, string)) {
+	runMedia(ctx, c, b, socket, configPath, notice, ready, failed, nil)
+}
+
+func runMedia(ctx context.Context, c Config, b Binaries, socket, configPath string, notice func(string), ready func(bool), failed func(Camera, string), control *mediaControl) {
 	reportFailure := func(message string) {
 		notice(message)
 		for _, camera := range c.Cameras {
@@ -178,7 +195,7 @@ func RunMedia(ctx context.Context, c Config, b Binaries, socket, configPath stri
 			}
 		}
 	}
-	data, e := MediaConfig(c, b, socket)
+	data, e := mediaConfig(c, b, socket, control)
 	if e == nil {
 		e = AtomicWrite(configPath, data, 0600)
 	}

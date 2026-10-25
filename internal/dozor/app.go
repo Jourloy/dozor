@@ -18,6 +18,7 @@ import (
 )
 
 type Runtime struct {
+	mediaControl      *mediaControl
 	network           *NetworkWatchdog
 	breaks            map[string][]int64
 	lastBreak         int64
@@ -199,9 +200,14 @@ func (a *App) start(ctx context.Context) error {
 		}
 	}
 
+	control, e := newMediaControl()
+	if e != nil {
+		s.Close()
+		return fmt.Errorf("не удалось подготовить контроль записи: %w", e)
+	}
 	rctx, cancel := context.WithCancel(ctx)
 	archiveCtx, archiveCancel := context.WithCancel(rctx)
-	r := &Runtime{network: a.network, catalogMS: time.Since(started).Milliseconds(), Store: s, Engine: NewEngine(s, a.Bins), cancel: cancel, archiveCancel: archiveCancel, segments: make(chan Segment, 512), bufferWake: make(chan struct{}, 1)}
+	r := &Runtime{mediaControl: control, network: a.network, catalogMS: time.Since(started).Milliseconds(), Store: s, Engine: NewEngine(s, a.Bins), cancel: cancel, archiveCancel: archiveCancel, segments: make(chan Segment, 512), bufferWake: make(chan struct{}, 1)}
 	r.Engine.deferRecovered = true
 	if e = r.initStreams(c.Cameras, time.Now()); e != nil {
 		s.Close()
@@ -216,7 +222,7 @@ func (a *App) start(ctx context.Context) error {
 	a.publishStatus(r)
 	launch := func(f func()) { r.wg.Add(1); go func() { defer r.wg.Done(); f() }() }
 	launch(func() {
-		RunMedia(rctx, c, a.Bins, a.Socket, filepath.Join(a.StateDir, "mediamtx.yml"), s.Notice, func(ready bool) {
+		runMedia(rctx, c, a.Bins, a.Socket, filepath.Join(a.StateDir, "mediamtx.yml"), s.Notice, func(ready bool) {
 			if ready {
 				r.mediaSince.Store(time.Now().Unix())
 			} else {
@@ -235,10 +241,11 @@ func (a *App) start(ctx context.Context) error {
 			if rctx.Err() == nil {
 				r.reportCameraFailure(camera, "connection", message, time.Now())
 			}
-		})
+		}, control)
 	})
 	for _, cam := range c.Cameras {
 		if cam.Enabled {
+			launch(func() { r.watchRecording(rctx, cam) })
 			launch(func() {
 				RunMotion(rctx, cam, a.Bins, r.Engine.Signal, func(message string) {
 					r.reportCameraFailure(cam, "detector", message, time.Now())
@@ -287,6 +294,9 @@ func (a *App) stop() {
 	a.mu.Unlock()
 	r.cancel()
 	r.wg.Wait()
+	if r.mediaControl != nil {
+		r.mediaControl.client.CloseIdleConnections()
+	}
 	finishCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := r.finishDisabledStreams(finishCtx, a.Config.Get().Cameras, time.Now()); err != nil {

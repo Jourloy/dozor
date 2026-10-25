@@ -63,6 +63,9 @@ func (r *Runtime) reportCameraFailure(camera Camera, kind, message string, now t
 	}
 	r.diagnosticNotices[key] = failure
 	prefix := "Не удалось подключиться к камере"
+	if kind == "recording" {
+		prefix = "Сбой записи камеры"
+	}
 	if kind == "detector" {
 		prefix = "Детектор недоступен, временная непрерывная запись"
 	}
