@@ -2,7 +2,6 @@ package dozor
 
 import (
 	"context"
-	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -72,7 +71,7 @@ func TestArchiveDiscardsInvalidSegmentsAfterThreeFailures(t *testing.T) {
 	}
 }
 
-func TestArchiveDeletesUnassemblableEventAfterFourthFailure(t *testing.T) {
+func TestArchivePreservesUnassemblableEventAcrossRetries(t *testing.T) {
 	for _, failure := range []string{"missing ffmpeg", "missing ffprobe", "permission denied", "no space left", "timeout", "valid inputs", "probe unavailable"} {
 		t.Run(failure, func(t *testing.T) {
 			s := testStore(t)
@@ -118,20 +117,27 @@ func TestArchiveDeletesUnassemblableEventAfterFourthFailure(t *testing.T) {
 					return Part{}, fmt.Errorf("%w: %w", errVideoAssembly, context.DeadlineExceeded)
 				}
 			}
-			must(t, engine.Tick(context.Background(), now.Add(38*time.Second)))
-			if _, err = s.Event(ev.ID); !errors.Is(err, sql.ErrNoRows) {
-				t.Fatalf("fourth failure left an event: %v", err)
+			for _, seconds := range []int{38, 44, 55, 76, 117, 178} {
+				if err := engine.Tick(context.Background(), now.Add(time.Duration(seconds)*time.Second)); !errors.Is(err, errVideoAssembly) {
+					t.Fatalf("expected retryable failure: %v", err)
+				}
 			}
-			if len(s.Notices()) != 1 || !strings.Contains(s.Notices()[0].Message, "после 4 ошибок") {
-				t.Fatal("missing deletion notice", s.Notices())
+			actual, err = s.Event(ev.ID)
+			must(t, err)
+			must(t, s.PruneBuffer(now.Add(10*time.Minute)))
+			if actual.Cursor != ev.Cursor || actual.Status != "closing" || actual.AssemblyFailures != invalidVideoAttempts || !s.HasSegment(seg.Path) || len(s.Notices()) != 0 {
+				t.Fatalf("persistent assembly failure discarded video: %+v", actual)
 			}
-			if _, err = os.Stat(filepath.Join(s.Root, eventDir(ev))); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("deleted archive directory remains: %v", err)
-			}
-			must(t, s.Recover())
-			must(t, engine.Tick(context.Background(), now.Add(2*time.Minute)))
-			if _, err = s.Event(ev.ID); !errors.Is(err, sql.ErrNoRows) || s.QueueCount() != 0 {
-				t.Fatalf("deleted event or upload jobs returned: %v", err)
+			_, err = os.Stat(filepath.Join(s.Root, seg.Path))
+			must(t, err)
+			engine = recordingEngine(t, s)
+			must(t, engine.Tick(context.Background(), now.Add(11*time.Minute)))
+			actual, err = s.Event(ev.ID)
+			must(t, err)
+			parts, err := s.Parts(ev.ID)
+			must(t, err)
+			if actual.Status != "closed" || actual.AssemblyFailures != 0 || len(parts) != 1 {
+				t.Fatalf("event did not recover after the tool recovered: %+v %+v", actual, parts)
 			}
 		})
 	}

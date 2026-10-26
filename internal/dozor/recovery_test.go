@@ -3,7 +3,6 @@ package dozor
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
@@ -142,9 +141,6 @@ func TestSensitivityReloadStartsDespiteUnfinishedVideo(t *testing.T) {
 			app.runtime.Engine.tickMu.Lock()
 			actual, err := app.runtime.Store.Event(ev.ID)
 			app.runtime.Engine.tickMu.Unlock()
-			if errors.Is(err, sql.ErrNoRows) {
-				break // A fourth failed assembly deletes the event across reloads.
-			}
 			must(t, err)
 			if actual.Status == "closed" || actual.AssemblyFailures >= attempt+1 {
 				break
@@ -168,21 +164,9 @@ func TestSensitivityReloadStartsDespiteUnfinishedVideo(t *testing.T) {
 		}
 	}
 	actual, err := app.runtime.Store.Event(ev.ID)
-	if errors.Is(err, sql.ErrNoRows) {
-		deleted := false
-		for _, notice := range app.runtime.Store.Notices() {
-			deleted = deleted || (strings.Contains(notice.Message, "Архив удалён после 4 ошибок") && strings.Contains(notice.Message, ev.ID))
-		}
-		if !deleted {
-			t.Fatal("event disappeared without exhausting its persisted retry limit")
-		}
-		// Shared buffer inputs expire independently of the deleted event.
-		must(t, app.runtime.Store.PruneBuffer(time.Now().Add(2*time.Minute)))
-	} else {
-		must(t, err)
-		if actual.Status != "closed" || !actual.Incomplete || actual.AssemblyFailures != 0 || app.runtime.Store.HasSegment(seg.Path) {
-			t.Fatal("repeated recovery failures did not discard the invalid recording", actual)
-		}
+	must(t, err)
+	if actual.Status != "closed" || !actual.Incomplete || actual.AssemblyFailures != 0 || app.runtime.Store.HasSegment(seg.Path) {
+		t.Fatal("repeated recovery failures did not discard the invalid recording", actual)
 	}
 	if _, err = os.Stat(filepath.Join(app.runtime.Store.Root, seg.Path)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("invalid recording remains after repeated recovery: %v", err)

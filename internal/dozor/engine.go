@@ -29,6 +29,7 @@ type Engine struct {
 	tickMu         sync.Mutex
 	assemblyCancel context.CancelFunc
 	states         map[string]MotionState
+	pendingMotion  map[string][]motionWindow
 	active         map[string]string
 	online         map[string]bool
 	disconnected   map[string]int64
@@ -41,7 +42,15 @@ type Engine struct {
 const (
 	disconnectSource       = "disconnect"
 	disconnectClipDuration = 60 * time.Second
+	motionPostroll         = 10 * time.Second
 )
+
+// Keep detected intervals until the worker persists them. A quiet frame must
+// not erase a short pulse, including while another camera's video is assembled.
+type motionWindow struct {
+	start, end time.Time
+	source     string
+}
 
 type assemblyRetry struct {
 	next  time.Time
@@ -49,7 +58,7 @@ type assemblyRetry struct {
 }
 
 func NewEngine(s *Store, b Binaries) *Engine {
-	return &Engine{Store: s, Bins: b, states: map[string]MotionState{}, active: map[string]string{}, online: map[string]bool{}, disconnected: map[string]int64{}, retries: map[string]assemblyRetry{}, assemble: Assemble}
+	return &Engine{Store: s, Bins: b, states: map[string]MotionState{}, pendingMotion: map[string][]motionWindow{}, active: map[string]string{}, online: map[string]bool{}, disconnected: map[string]int64{}, retries: map[string]assemblyRetry{}, assemble: Assemble}
 }
 
 func (e *Engine) SetOnline(camera string, online bool) {
@@ -68,6 +77,9 @@ func (e *Engine) Disconnect(camera string, at time.Time) error {
 	defer e.mu.Unlock()
 	e.Store.mutate.Lock()
 	defer e.Store.mutate.Unlock()
+	if err := e.recordMotion(camera, at); err != nil {
+		return err
+	}
 	e.online[camera] = false
 	previous := e.disconnected[camera]
 	e.disconnected[camera] = at.UnixMilli()
@@ -122,8 +134,8 @@ func (e *Engine) markLastPart(ev Event) error {
 	return nil
 }
 
-// Completion hooks may race the offline hook. Reopen only the interrupted
-// event that owns a late tail, without waiting for a camera reconnection.
+// Completion hooks may arrive after an event closes. Reopen every event that
+// still needs this tail, including ordinary motion recordings.
 func (e *Engine) AddSegment(seg Segment) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -155,12 +167,10 @@ func (e *Engine) AddSegment(seg Segment) error {
 		if err != nil {
 			return err
 		}
-		if ev.DisconnectedAt != 0 {
-			ev.Status = "closing"
-			ev.Uploaded = false
-			if err = e.Store.SaveEvent(ev); err != nil {
-				return err
-			}
+		ev.Status = "closing"
+		ev.Uploaded = false
+		if err = e.Store.SaveEvent(ev); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -174,6 +184,73 @@ func (e *Engine) Signal(v MotionSignal) {
 		started = v.At
 	}
 	e.states[v.CameraID] = MotionState{Active: v.Active, Healthy: v.Healthy, Source: v.Source, Updated: v.At, Started: started}
+	if online, known := e.online[v.CameraID]; known && !online {
+		return
+	}
+	if v.Active || !v.Healthy {
+		source := v.Source
+		if !v.Healthy {
+			source = "detector_failure"
+		}
+		e.queueMotion(v.CameraID, motionWindow{started, v.At, source})
+	}
+}
+
+// Caller owns mu. Consecutive positive signals describe continuous motion even
+// if the worker has been busy for longer than the merging window.
+func (e *Engine) queueMotion(camera string, window motionWindow) {
+	windows := e.pendingMotion[camera]
+	if n := len(windows); n > 0 && !window.start.After(windows[n-1].end.Add(motionPostroll)) {
+		if window.end.After(windows[n-1].end) {
+			windows[n-1].end = window.end
+		}
+	} else {
+		windows = append(windows, window)
+	}
+	e.pendingMotion[camera] = windows
+}
+
+// Caller owns mu and Store.mutate. Consume a window only after its event is
+// saved, so a catalog error does not acknowledge motion that was never recorded.
+func (e *Engine) recordMotion(camera string, now time.Time) error {
+	if online, known := e.online[camera]; known && !online {
+		return nil
+	}
+	if st, exists := e.states[camera]; exists && (st.Active || !st.Healthy) {
+		source := st.Source
+		if !st.Healthy {
+			source = "detector_failure"
+		}
+		e.queueMotion(camera, motionWindow{st.Started, now, source})
+	}
+	for len(e.pendingMotion[camera]) > 0 {
+		window := e.pendingMotion[camera][0]
+		id := e.active[camera]
+		var ev Event
+		if id != "" {
+			var err error
+			ev, err = e.Store.Event(id)
+			if err != nil {
+				return eventError(Event{ID: id, CameraID: camera}, "чтение события", err)
+			}
+			if window.start.UnixMilli() > ev.End {
+				id = ""
+			}
+		}
+		if id == "" {
+			ev = Event{ID: ID(), CameraID: camera, Source: window.source, Start: window.start.Add(-time.Minute).UnixMilli(), Status: "open"}
+			ev.Start = max(ev.Start, e.disconnected[camera])
+			ev.Cursor = ev.Start
+		}
+		ev.End = max(ev.End, window.end.Add(motionPostroll).UnixMilli())
+		if err := e.Store.SaveEvent(ev); err != nil {
+			return eventError(ev, "сохранение события", err)
+		}
+		e.active[camera] = ev.ID
+		e.pendingMotion[camera] = e.pendingMotion[camera][1:]
+	}
+	delete(e.pendingMotion, camera)
+	return nil
 }
 func (e *Engine) States() map[string]MotionState {
 	e.mu.Lock()
@@ -202,7 +279,7 @@ func (e *Engine) PrepareUpdate(immediate bool) bool {
 		if online, known := e.online[camera]; known && !online {
 			continue
 		}
-		if s.Active || !s.Healthy {
+		if s.Active || !s.Healthy || len(e.pendingMotion[camera]) > 0 {
 			return false
 		}
 	}
@@ -220,38 +297,9 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) error {
 	e.Store.mutate.Lock()
 	defer e.Store.mutate.Unlock()
 	if !e.paused {
-		for cam, st := range e.states {
-			if online, known := e.online[cam]; known && !online {
-				continue
-			}
-			if !st.Healthy || st.Active {
-				id := e.active[cam]
-				var ev Event
-				if id != "" {
-					var err error
-					ev, err = e.Store.Event(id)
-					if err != nil {
-						return eventError(Event{ID: id, CameraID: cam}, "чтение события", err)
-					}
-					// Waiting for the recorder to close its last segment must not
-					// extend the ten-second motion merging window.
-					if st.Started.UnixMilli() > ev.End {
-						id = ""
-					}
-				}
-				if id == "" {
-					ev = Event{ID: ID(), CameraID: cam, Source: st.Source, Start: now.Add(-60 * time.Second).UnixMilli(), End: now.Add(10 * time.Second).UnixMilli(), Status: "open"}
-					ev.Start = max(ev.Start, e.disconnected[cam])
-					ev.Cursor = ev.Start
-					if !st.Healthy {
-						ev.Source = "detector_failure"
-					}
-					e.active[cam] = ev.ID
-				}
-				ev.End = now.Add(10 * time.Second).UnixMilli()
-				if err := e.Store.SaveEvent(ev); err != nil {
-					return eventError(ev, "сохранение события", err)
-				}
+		for cam := range e.states {
+			if err := e.recordMotion(cam, now); err != nil {
+				return err
 			}
 		}
 	}
@@ -327,23 +375,12 @@ eventsLoop:
 					if guardErr := e.Store.Guard.Check(); guardErr != nil {
 						return eventError(ev, "проверка диска", guardErr)
 					}
-					failures := min(ev.AssemblyFailures+1, maxAssemblyFailures)
+					failures := min(ev.AssemblyFailures+1, invalidVideoAttempts)
 					if failures != ev.AssemblyFailures {
 						ev.AssemblyFailures = failures
 						if saveErr := e.Store.SaveEvent(ev); saveErr != nil {
 							return eventError(ev, "сохранение ошибок сборки", saveErr)
 						}
-					}
-					if failures >= maxAssemblyFailures {
-						if deleteErr := e.Store.deleteEvent(ev); deleteErr != nil {
-							return eventError(ev, "удаление несобранного архива", deleteErr)
-						}
-						delete(e.retries, ev.ID)
-						if e.active[ev.CameraID] == ev.ID {
-							delete(e.active, ev.CameraID)
-						}
-						e.Store.Notice(fmt.Sprintf("Архив удалён после %d ошибок сборки: %v", failures, err))
-						continue eventsLoop
 					}
 					if failures >= invalidVideoAttempts && invalidVideoData(err) {
 						removed, cleanupErr := e.discardInvalidSegments(ctx, &ev, selected, err)
@@ -379,7 +416,12 @@ eventsLoop:
 					return eventError(ev, "сохранение события", err)
 				}
 				delete(e.retries, ev.ID)
-				segs = segs[len(selected):]
+				// Assembly releases the locks: another completed segment may have
+				// arrived while the event was still open. Drain it before closing.
+				segs, err = e.Store.Segments(ev.CameraID, ev.Cursor, ev.End)
+				if err != nil {
+					return eventError(ev, "чтение фрагментов", err)
+				}
 				// Closed streams must drain their entire tail on this tick.
 				if expired {
 					continue

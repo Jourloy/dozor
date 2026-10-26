@@ -8,7 +8,6 @@ import (
 )
 
 const invalidVideoAttempts = 3
-const maxAssemblyFailures = 4
 
 // A bad input can fail a whole minute's assembly. Check each completed source
 // separately so that usable fragments from the same batch are preserved.
