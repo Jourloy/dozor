@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,6 +25,8 @@ type NetworkReboot struct {
 	Affected    int    `json:"affected"`
 	Total       int    `json:"total"`
 	Error       string `json:"error,omitempty"`
+	BootID      string `json:"boot_id,omitempty"`
+	RecoveredAt int64  `json:"recovered_at,omitempty"`
 }
 
 type networkState struct {
@@ -34,13 +37,26 @@ type networkState struct {
 type NetworkWatchdog struct {
 	mu       sync.Mutex
 	path     string
+	bootID   string
 	state    networkState
 	pending  *NetworkReboot
 	inFlight bool
 }
 
 func loadNetworkWatchdog(stateDir string) (*NetworkWatchdog, error) {
-	w := &NetworkWatchdog{path: filepath.Join(stateDir, "network-reboots.json")}
+	var bootID string
+	if runtime.GOOS == "linux" {
+		b, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		if err != nil {
+			return nil, err
+		}
+		bootID = strings.TrimSpace(string(b))
+	}
+	return loadNetworkWatchdogForBoot(stateDir, bootID, time.Now())
+}
+
+func loadNetworkWatchdogForBoot(stateDir, bootID string, now time.Time) (*NetworkWatchdog, error) {
+	w := &NetworkWatchdog{path: filepath.Join(stateDir, "network-reboots.json"), bootID: bootID}
 	b, err := os.ReadFile(w.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return w, nil
@@ -48,7 +64,29 @@ func loadNetworkWatchdog(stateDir string) (*NetworkWatchdog, error) {
 	if err == nil {
 		err = json.Unmarshal(b, &w.state)
 	}
+	if err == nil {
+		err = w.confirmRecovery(now)
+	}
 	return w, err
+}
+
+// Called before sharing w, or with its mutex held. Only a different OS boot
+// confirms the latest attempt; restarting the service or systemctl success does not.
+func (w *NetworkWatchdog) confirmRecovery(now time.Time) error {
+	if len(w.state.Reports) == 0 {
+		return nil
+	}
+	report := &w.state.Reports[len(w.state.Reports)-1]
+	if w.bootID == "" || report.BootID == "" || w.bootID == report.BootID ||
+		report.Error != "" || report.RecoveredAt != 0 || now.UnixMilli() <= report.RequestedAt {
+		return nil
+	}
+	report.RecoveredAt = now.UnixMilli()
+	if err := WriteJSON(w.path, w.state); err != nil {
+		report.RecoveredAt = 0
+		return err
+	}
+	return nil
 }
 
 func (w *NetworkWatchdog) Reports() []NetworkReboot {
@@ -113,6 +151,11 @@ func (r *Runtime) observeStream(ctx context.Context, camera string, online bool,
 
 func (w *NetworkWatchdog) tick(now time.Time, reboot func() error) error {
 	w.mu.Lock()
+	// Startup may precede clock synchronization on a Pi without a working RTC.
+	if err := w.confirmRecovery(now); err != nil {
+		w.mu.Unlock()
+		return err
+	}
 	if w.pending == nil {
 		w.mu.Unlock()
 		return nil
@@ -124,6 +167,7 @@ func (w *NetworkWatchdog) tick(now time.Time, reboot func() error) error {
 	}
 	report := *w.pending
 	report.RequestedAt = now.UnixMilli()
+	report.BootID = w.bootID
 	next := networkState{LastAttempt: report.RequestedAt}
 	for _, previous := range w.state.Reports {
 		if previous.RequestedAt > now.Add(-7*24*time.Hour).UnixMilli() {

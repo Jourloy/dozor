@@ -151,3 +151,84 @@ func TestNetworkTickConsumesAllShortHooksInOneBatch(t *testing.T) {
 		t.Fatal("short flaps between observations disappeared")
 	}
 }
+
+func TestNetworkRecoveryRequiresANewSystemBootAndSurvivesRestarts(t *testing.T) {
+	dir := t.TempDir()
+	at := time.UnixMilli(2_000_000)
+	w, err := loadNetworkWatchdogForBoot(dir, "boot-before", at)
+	must(t, err)
+	w.queue(NetworkReboot{At: at.UnixMilli(), Affected: 3, Total: 5})
+	must(t, w.tick(at, func() error { return nil }))
+	if report := w.Reports()[0]; report.BootID != "boot-before" || report.RecoveredAt != 0 {
+		t.Fatal("command success is not a reboot confirmation", report)
+	}
+	w, err = loadNetworkWatchdogForBoot(dir, "boot-before", at.Add(time.Minute))
+	must(t, err)
+	if w.Reports()[0].RecoveredAt != 0 {
+		t.Fatal("service restart confirmed an OS reboot")
+	}
+	recovered := at.Add(90 * time.Second)
+	w, err = loadNetworkWatchdogForBoot(dir, "boot-after", recovered)
+	must(t, err)
+	if w.Reports()[0].RecoveredAt != recovered.UnixMilli() {
+		t.Fatal("system boot was not confirmed", w.Reports())
+	}
+	for _, boot := range []string{"boot-after", "boot-later"} {
+		w, err = loadNetworkWatchdogForBoot(dir, boot, at.Add(time.Hour))
+		must(t, err)
+		if w.Reports()[0].RecoveredAt != recovered.UnixMilli() {
+			t.Fatal("original confirmation changed after restart")
+		}
+	}
+}
+
+func TestNetworkRecoveryDoesNotConfirmFailedUnknownOrOlderAttempts(t *testing.T) {
+	at := time.UnixMilli(2_000_000)
+	for _, report := range []NetworkReboot{
+		{RequestedAt: at.UnixMilli()}, // Old firmware did not record the boot ID.
+		{RequestedAt: at.UnixMilli(), BootID: "old", Error: "systemctl refused"},
+	} {
+		dir := t.TempDir()
+		must(t, WriteJSON(filepath.Join(dir, "network-reboots.json"), networkState{Reports: []NetworkReboot{report}}))
+		w, err := loadNetworkWatchdogForBoot(dir, "new", at.Add(time.Minute))
+		must(t, err)
+		if w.Reports()[0].RecoveredAt != 0 {
+			t.Fatal("unproven attempt was confirmed", report)
+		}
+	}
+	dir := t.TempDir()
+	must(t, WriteJSON(filepath.Join(dir, "network-reboots.json"), networkState{Reports: []NetworkReboot{
+		{RequestedAt: at.UnixMilli() - 600_000, BootID: "old"},
+		{RequestedAt: at.UnixMilli(), BootID: "old"},
+	}}))
+	w, err := loadNetworkWatchdogForBoot(dir, "", at.Add(time.Minute))
+	must(t, err)
+	if w.Reports()[1].RecoveredAt != 0 {
+		t.Fatal("unknown current boot confirmed a reboot")
+	}
+	w, err = loadNetworkWatchdogForBoot(dir, "new", at.Add(time.Minute))
+	must(t, err)
+	if reports := w.Reports(); reports[0].RecoveredAt != 0 || reports[1].RecoveredAt == 0 {
+		t.Fatal("new boot must confirm only the latest attempt", reports)
+	}
+}
+
+func TestNetworkRecoveryWaitsForClockSynchronization(t *testing.T) {
+	dir := t.TempDir()
+	at := time.UnixMilli(2_000_000)
+	must(t, WriteJSON(filepath.Join(dir, "network-reboots.json"), networkState{Reports: []NetworkReboot{
+		{RequestedAt: at.UnixMilli(), BootID: "before"},
+	}}))
+	w, err := loadNetworkWatchdogForBoot(dir, "after", at.Add(-time.Hour))
+	must(t, err)
+	if w.Reports()[0].RecoveredAt != 0 {
+		t.Fatal("unsynchronized clock exposed an invalid recovery timestamp")
+	}
+	recovered := at.Add(time.Minute)
+	must(t, w.tick(recovered, func() error { t.Fatal("must not repeat the reboot"); return nil }))
+	w, err = loadNetworkWatchdogForBoot(dir, "after", recovered.Add(time.Minute))
+	must(t, err)
+	if w.Reports()[0].RecoveredAt != recovered.UnixMilli() {
+		t.Fatal("confirmation was lost when clock synchronization followed startup")
+	}
+}
