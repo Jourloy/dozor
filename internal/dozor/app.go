@@ -119,6 +119,7 @@ type App struct {
 	healthView                atomic.Value
 	runStarted                atomic.Int64
 	storage                   *StoragePolicyFile
+	uploads                   *CloudUploadControl
 }
 
 func NewApp(c *ConfigFile, b Binaries, dev bool, state, socket, version string) (*App, error) {
@@ -137,7 +138,11 @@ func NewApp(c *ConfigFile, b Binaries, dev bool, state, socket, version string) 
 	if err != nil {
 		return nil, err
 	}
-	a := &App{network: network, storage: storage, reboots: reboots, Config: c, Bins: b, Development: dev, StateDir: state, Socket: socket, Version: version, reload: make(chan struct{}, 1), sessions: map[string]Session{}, attempts: map[string]loginAttempt{}}
+	uploads, err := loadCloudUpload(state)
+	if err != nil {
+		return nil, err
+	}
+	a := &App{uploads: uploads, network: network, storage: storage, reboots: reboots, Config: c, Bins: b, Development: dev, StateDir: state, Socket: socket, Version: version, reload: make(chan struct{}, 1), sessions: map[string]Session{}, attempts: map[string]loginAttempt{}}
 	if c.Get().PasswordHash == "" {
 		p := filepath.Join(state, "setup-token")
 		token, e := os.ReadFile(p)
@@ -261,7 +266,7 @@ func (a *App) start(ctx context.Context) error {
 			}
 			remote := NewS3(c.S3)
 			for rctx.Err() == nil {
-				worked, err := UploadOne(rctx, s, c.S3, remote)
+				worked, err := a.uploads.uploadOne(rctx, s, c.S3, remote)
 				if err != nil || !worked {
 					if !pause(rctx, 3*time.Second) {
 						return
@@ -483,6 +488,9 @@ func (a *App) Status() map[string]any {
 	m["update_status"], m["update_running"] = update.Message, update.Running
 	m["update_outcome"], m["update_target"], m["update_at"] = update.Outcome, update.Target, update.atMillis()
 	m["health"] = a.Health()
+	if a.uploads != nil {
+		m["cloud_upload"] = a.cloudUploadView(a.uploads.Get())
+	}
 	if a.network != nil {
 		m["network_reboots"] = a.network.Reports()
 	}

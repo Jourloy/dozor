@@ -265,7 +265,9 @@ func UploadOne(ctx context.Context, s *Store, c S3Config, remote ObjectStore) (b
 	}
 	if !acknowledged {
 		if e = remote.Put(ctx, key, filepath.Join(s.Root, rel), sha, md, size); e != nil {
-			_ = s.Retry(j, "S3 недоступен или отказал в доступе; повтор запланирован")
+			if ctx.Err() == nil {
+				_ = s.Retry(j, "S3 недоступен или отказал в доступе; повтор запланирован")
+			}
 			return false, e
 		}
 		if j.Kind == "event" {
